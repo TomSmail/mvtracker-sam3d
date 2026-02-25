@@ -2,18 +2,14 @@
 #SBATCH --job-name=eval-058
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:1
-#SBATCH --mem=460000
-#SBATCH --partition=normal
-#SBATCH --account=a-a03
+#SBATCH --gpus=1
 #SBATCH --time=00:10:00
 #SBATCH --dependency=singleton
 #SBATCH --mail-type=begin
 #SBATCH --mail-type=end
-#SBATCH --mail-user=frano.rajic@inf.ethz.ch
+#SBATCH --mail-user=tsmail@ethz.ch
 #SBATCH --output=./logs/slurm_logs/%x-%j.out
-#SBATCH --array=0-85
+#SBATCH --array=0-74
 
 set -x
 cat $0
@@ -181,8 +177,10 @@ SELECTED_DATASET=${DATASETS[$DATASET_INDEX]}
 echo "Selected Checkpoint: $SELECTED_CKPT"
 echo "Selected Dataset: $SELECTED_DATASET"
 
+# Load modules and activate venv
+module load stack/2024-06 gcc/12.2.0 python_cuda/3.11.6
+source $DIR/venv/bin/activate
+cd $DIR
+
 # Run the job with the extracted checkpoint & dataset
-srun -ul --container-writable --environment=my_pytorch_env numactl --membind=0-3 bash -c "
-    source /users/fraji/venvs/spa10/bin/activate &&
-    CUDA_VISIBLE_DEVICES=0 TORCH_HOME=./checkpoints/.cache python eval.py $SELECTED_CKPT datasets.eval.names=[$SELECTED_DATASET]
-"
+PYTHONPATH=$DIR TORCH_HOME=./checkpoints/.cache python mvtracker/cli/eval.py $SELECTED_CKPT datasets.eval.names=[$SELECTED_DATASET]

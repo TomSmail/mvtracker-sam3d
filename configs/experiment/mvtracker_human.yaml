@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human
+
+datasets:
+  eval:
+    names:
+      # Human trajectory tracks from AnthroTAP data engine
+      - panoptic-human-views1_7_14_20
+      - panoptic-human-views27_16_14_8
+      - panoptic-human-views1_4_7_11
+      # Original Panoptic Studio benchmarks for comparison
+      - panoptic-multiview-views1_7_14_20
+      - panoptic-multiview-views27_16_14_8
+      - panoptic-multiview-views1_4_7_11
