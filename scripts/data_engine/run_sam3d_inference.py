@@ -146,6 +146,8 @@ def main():
     parser.add_argument("--mhr_path", type=str,
                         default=os.path.expanduser("~/checkpoints/sam-3d-body-dinov3/assets/mhr_model.pt"))
     parser.add_argument("--detector_name", type=str, default="vitdet")
+    parser.add_argument("--detector_path", type=str, default="",
+                        help="Path to directory containing detector checkpoint (avoids download)")
     parser.add_argument("--inference_type", type=str, default="body",
                         choices=["full", "body", "hand"],
                         help="SAM3D inference type (body is faster, full includes hand refinement)")
@@ -181,7 +183,8 @@ def main():
     if args.detector_name:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "sam-3d-body"))
         from tools.build_detector import HumanDetector
-        human_detector = HumanDetector(name=args.detector_name, device=device)
+        human_detector = HumanDetector(name=args.detector_name, device=device,
+                                       path=args.detector_path)
 
     estimator = SAM3DBodyEstimator(
         sam_3d_body_model=model,
