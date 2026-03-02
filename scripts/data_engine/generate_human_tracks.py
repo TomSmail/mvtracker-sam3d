@@ -407,6 +407,73 @@ def process_sequence(seq_path, n_vertex_samples=500, smooth_kernel=3,
     if max_persons is not None:
         n_persons_target = min(n_persons_target, max_persons)
 
+    # Step 1b: Temporal identity linking -- ensure person ordering is
+    # consistent across frames by matching each frame's persons to the
+    # previous frame using pelvis proximity (Hungarian algorithm).
+    if n_persons_target > 1:
+        ref_frame = None
+        for t in range(n_frames):
+            fp = all_frame_persons[t]
+            if len(fp) < n_persons_target:
+                continue
+            if all(p["n_views_fused"] >= 3 for p in fp[:n_persons_target]):
+                ref_frame = t
+                break
+
+        if ref_frame is not None:
+            prev_pelvis = np.array([
+                fp["keypoints_3d"][[9, 10]].mean(axis=0)
+                for fp in all_frame_persons[ref_frame][:n_persons_target]
+            ])
+
+            # Forward pass: ref_frame+1 ... n_frames-1
+            for t in range(ref_frame + 1, n_frames):
+                fp = all_frame_persons[t]
+                if len(fp) < n_persons_target:
+                    continue
+                curr_pelvis = np.array([
+                    p["keypoints_3d"][[9, 10]].mean(axis=0)
+                    for p in fp[:n_persons_target]
+                ])
+                cost = np.linalg.norm(
+                    prev_pelvis[:, None, :] - curr_pelvis[None, :, :], axis=-1
+                )
+                row_ind, col_ind = linear_sum_assignment(cost)
+                reordered = [None] * n_persons_target
+                for r, c in zip(row_ind, col_ind):
+                    reordered[r] = fp[c]
+                all_frame_persons[t] = reordered + list(fp[n_persons_target:])
+                prev_pelvis = np.array([
+                    p["keypoints_3d"][[9, 10]].mean(axis=0)
+                    for p in all_frame_persons[t][:n_persons_target]
+                ])
+
+            # Backward pass: ref_frame-1 ... 0
+            prev_pelvis = np.array([
+                fp["keypoints_3d"][[9, 10]].mean(axis=0)
+                for fp in all_frame_persons[ref_frame][:n_persons_target]
+            ])
+            for t in range(ref_frame - 1, -1, -1):
+                fp = all_frame_persons[t]
+                if len(fp) < n_persons_target:
+                    continue
+                curr_pelvis = np.array([
+                    p["keypoints_3d"][[9, 10]].mean(axis=0)
+                    for p in fp[:n_persons_target]
+                ])
+                cost = np.linalg.norm(
+                    prev_pelvis[:, None, :] - curr_pelvis[None, :, :], axis=-1
+                )
+                row_ind, col_ind = linear_sum_assignment(cost)
+                reordered = [None] * n_persons_target
+                for r, c in zip(row_ind, col_ind):
+                    reordered[r] = fp[c]
+                all_frame_persons[t] = reordered + list(fp[n_persons_target:])
+                prev_pelvis = np.array([
+                    p["keypoints_3d"][[9, 10]].mean(axis=0)
+                    for p in all_frame_persons[t][:n_persons_target]
+                ])
+
     # Select vertex indices to sample (consistent across frames)
     first_valid = next(fp for fp in all_frame_persons if len(fp) > 0)
     n_mesh_verts = first_valid[0]["vertices"].shape[0]
