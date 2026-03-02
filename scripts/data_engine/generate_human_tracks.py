@@ -169,6 +169,11 @@ def associate_persons_across_views(predictions, extrinsics, n_views, frame_idx,
             if cost[r, c] < max_distance:
                 groups[r][v] = c
 
+    # Sort groups by number of supporting views (most views first) so the
+    # best-supported person is always at index 0. This prevents spurious
+    # detections from a single view from displacing the real person.
+    groups.sort(key=lambda g: len(g), reverse=True)
+
     return groups
 
 
@@ -434,11 +439,19 @@ def process_sequence(seq_path, n_vertex_samples=500, smooth_kernel=3,
         track_person_ids[base + n_keypoints:base + n_tracks_per_person] = person_idx
         track_point_ids[base + n_keypoints:base + n_tracks_per_person] = vertex_indices
 
+    min_views_for_valid = 3
+    n_views_per_frame = np.zeros(n_frames, dtype=int)
+
     for frame_idx in range(n_frames):
         frame_persons = all_frame_persons[frame_idx]
         for person_idx in range(min(len(frame_persons), n_persons_target)):
             person = frame_persons[person_idx]
             base = person_idx * n_tracks_per_person
+            n_fused = person["n_views_fused"]
+            n_views_per_frame[frame_idx] = max(n_views_per_frame[frame_idx], n_fused)
+
+            if n_fused < min_views_for_valid:
+                continue
 
             # Keypoints
             traj3d_world[frame_idx, base:base + n_keypoints] = person["keypoints_3d"]
@@ -448,6 +461,23 @@ def process_sequence(seq_path, n_vertex_samples=500, smooth_kernel=3,
             verts = person["vertices"][vertex_indices]
             traj3d_world[frame_idx, base + n_keypoints:base + n_tracks_per_person] = verts
             track_valid[frame_idx, base + n_keypoints:base + n_tracks_per_person] = True
+
+    # Interpolate frames that were rejected due to low view count
+    n_rejected = (n_views_per_frame < min_views_for_valid).sum()
+    if n_rejected > 0:
+        print(f"  Rejected {n_rejected} frames with <{min_views_for_valid} views, interpolating...")
+        for track_idx in range(n_tracks_total):
+            valid_frames = np.where(track_valid[:, track_idx])[0]
+            if len(valid_frames) == 0:
+                continue
+            invalid_frames = np.where(~track_valid[:, track_idx])[0]
+            for dim in range(3):
+                traj3d_world[invalid_frames, track_idx, dim] = np.interp(
+                    invalid_frames,
+                    valid_frames,
+                    traj3d_world[valid_frames, track_idx, dim],
+                )
+            track_valid[invalid_frames, track_idx] = True
 
     # Step 3: Temporal smoothing
     valid_mask = track_valid.all(axis=0)
