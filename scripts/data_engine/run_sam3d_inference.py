@@ -110,7 +110,7 @@ def process_sequence(estimator, seq_path, output_dir, skip_existing=True,
                     img_rgb,
                     cam_int=cam_int,
                     inference_type=inference_type,
-                    bbox_thr=0.3,
+                    bbox_thr=0.5,
                 )
             except Exception as e:
                 warnings.warn(f"SAM3D failed on {img_path}: {e}")

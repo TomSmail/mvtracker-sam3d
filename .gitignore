@@ -22,6 +22,17 @@ logs*
 /wandb
 
 
+# -------------------------------- Image Processing Gitignore --------------------------------
+
+*.mp4
+*.jpg
+*.png
+*.jpeg
+*.gif
+*.webp
+*.tiff
+*.bmp
+
 # -------------------------------- SAM3D Body Gitignore --------------------------------
 
 # Python bytecode

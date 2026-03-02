@@ -115,8 +115,10 @@ def cam_to_world(points_cam, extrinsic):
 
 def get_pelvis_world(person, extrinsic):
     """Get world-space pelvis position (mean of left_hip=9, right_hip=10)."""
-    kp3d = person["pred_keypoints_3d"]
-    pelvis_cam = kp3d[[9, 10], :].mean(axis=0)
+    kp3d = person["pred_keypoints_3d"]  # body-centered
+    cam_t = person["pred_cam_t"]        # translation to camera space
+    pelvis_body = kp3d[[9, 10], :].mean(axis=0)
+    pelvis_cam = pelvis_body + cam_t
     pelvis_world = cam_to_world(pelvis_cam[None], extrinsic)[0]
     return pelvis_world
 
@@ -185,9 +187,13 @@ def fuse_meshes_multiview(predictions, extrinsics, groups, frame_idx):
         for view_idx, person_idx in group.items():
             person = predictions[(view_idx, frame_idx)][person_idx]
             extr = extrinsics[view_idx]
+            cam_t = person["pred_cam_t"]               # [3] body-centered -> camera
 
-            kp_cam = person["pred_keypoints_3d"]      # [70, 3]
-            verts_cam = person["pred_vertices"]        # [V, 3]
+            kp_body = person["pred_keypoints_3d"]      # [70, 3] body-centered
+            verts_body = person["pred_vertices"]        # [V, 3] body-centered
+
+            kp_cam = kp_body + cam_t[None, :]
+            verts_cam = verts_body + cam_t[None, :]
 
             kp_world = cam_to_world(kp_cam, extr)
             verts_world = cam_to_world(verts_cam, extr)
