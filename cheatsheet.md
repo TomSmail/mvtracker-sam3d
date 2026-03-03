@@ -31,6 +31,14 @@ cd /cluster/home/tsmail/mvtracker-sam3d
 bash scripts/data_engine/download_panoptic.sh
 ```
 
+Use a custom full-dataset archive URL (if your default URL is only a subset):
+
+```bash
+PANOPTIC_TARBALL_URL="<full_panoptic_archive_url>" \
+PANOPTIC_EXPECTED_MIN_SEQS=65 \
+bash scripts/data_engine/download_panoptic.sh
+```
+
 Scratch location used by pipeline:
 
 ```bash
@@ -64,7 +72,13 @@ Runs all sequences, all views, all frames:
 
 ```bash
 cd /cluster/home/tsmail/mvtracker-sam3d
-sbatch scripts/data_engine/slurm_inference.sh
+bash scripts/data_engine/submit_slurm_inference_all.sh
+```
+
+Manual submission with custom array range:
+
+```bash
+sbatch --array=0-64 scripts/data_engine/slurm_inference.sh
 ```
 
 ### Single-sequence debug run
@@ -86,14 +100,14 @@ PYTHONPATH=$PWD python scripts/data_engine/run_sam3d_inference.py \
 
 ```bash
 cd /cluster/home/tsmail/mvtracker-sam3d
-sbatch scripts/data_engine/slurm_generate.sh
+bash scripts/data_engine/submit_slurm_generate_all.sh
 ```
 
 ### Force full regeneration (don’t skip existing `.npz`)
 
 ```bash
 rm /cluster/scratch/tsmail/datasets/panoptic-multiview/*/human_tracks.npz
-sbatch scripts/data_engine/slurm_generate.sh
+bash scripts/data_engine/submit_slurm_generate_all.sh
 ```
 
 ### Single-sequence debug run
@@ -264,4 +278,67 @@ PY
   3. `slurm_generate.sh`
   4. `visualize_tracks.py` + `report_human_tracks.py`
 - Keep this file updated whenever new stable commands are added.
+
+---
+
+## 11) Full Panoptic Studio source (official, not subset)
+
+Official dataset portal:
+
+```text
+http://domedb.perception.cs.cmu.edu/
+```
+
+Official toolbox + downloader (`getData.sh`):
+
+```text
+https://github.com/CMU-Perceptual-Computing-Lab/panoptic-toolbox
+```
+
+Quick start for downloading a full sequence from CMU Panoptic:
+
+```bash
+git clone https://github.com/CMU-Perceptual-Computing-Lab/panoptic-toolbox.git
+cd panoptic-toolbox/scripts
+
+# Usage:
+# ./getData.sh <sequence_name> <num_vga_views> <num_hd_views>
+
+# Example: download one sequence with all 31 HD cams:
+./getData.sh 160422_ultimatum1 0 31
+```
+
+No-clone version (download only `getData.sh` and run it):
+
+```bash
+mkdir -p /cluster/scratch/tsmail/datasets/panoptic-raw
+cd /cluster/scratch/tsmail/datasets/panoptic-raw
+wget -O getData.sh https://raw.githubusercontent.com/CMU-Perceptual-Computing-Lab/panoptic-toolbox/master/scripts/getData.sh
+chmod +x getData.sh
+
+# Download one sequence (all 31 HD cams, no VGA):
+./getData.sh 160422_ultimatum1 0 31
+```
+
+Using your local copied scripts (`getPanopticDataLatest.sh` + `getData.sh`) with scratch output:
+
+```bash
+cd /cluster/home/tsmail/mvtracker-sam3d
+PANOPTIC_RAW_ROOT=/cluster/scratch/tsmail/datasets/panoptic-raw \
+PANOPTIC_VGA_VIEWS=0 \
+PANOPTIC_HD_VIEWS=31 \
+bash scripts/data_engine/getPanopticDataLatest.sh
+```
+
+If you hit `Permission denied` on copied helper scripts:
+
+```bash
+chmod +x scripts/data_engine/getData.sh scripts/data_engine/getPanopticDataLatest.sh
+```
+
+Panoptic tools page (download usage details):
+
+```text
+http://domedb.perception.cs.cmu.edu/develop/tools.html
+```
 
