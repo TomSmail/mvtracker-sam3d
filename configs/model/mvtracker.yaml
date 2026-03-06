@@ -21,6 +21,8 @@ model:
   corr_add_neighbor_offset: true
   corr_add_neighbor_xyz: false
   corr_filter_invalid_depth: false   # slower, but would make sure points with invalid depth are not considered in corr
+  use_sam3d_knn_bias: false          # set true to enable SAM3D-guided kNN re-ranking
+  sam3d_knn_overfetch: 4             # over-fetch factor k' = k * overfetch before re-ranking
 
 evaluation:
   interp_shape: [ 384, 512 ]
