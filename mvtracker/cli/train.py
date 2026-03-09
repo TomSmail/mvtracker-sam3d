@@ -34,6 +34,7 @@ from mvtracker.datasets import KubricMultiViewDataset
 from mvtracker.datasets import TapVidDataset
 from mvtracker.datasets import kubric_multiview_dataset
 from mvtracker.datasets.dexycb_multiview_dataset import DexYCBMultiViewDataset
+from mvtracker.datasets.panoptic_human_trajectory_dataset import PanopticHumanTrajectoryDataset
 from mvtracker.datasets.panoptic_studio_multiview_dataset import PanopticStudioMultiViewDataset
 from mvtracker.datasets.utils import collate_fn, dataclass_to_cuda_
 from mvtracker.models.core.losses import balanced_ce_loss, sequence_loss_3d
@@ -414,6 +415,8 @@ def main(cfg: DictConfig):
             eval_dataset = KubricMultiViewDataset(**kubric_kwargs)
         elif dataset_name.startswith("kubric-multiview-v3"):
             eval_dataset = KubricMultiViewDataset.from_name(dataset_name, cfg.datasets.root, cfg)
+        elif dataset_name.startswith("panoptic-human"):
+            eval_dataset = PanopticHumanTrajectoryDataset.from_name(dataset_name, cfg.datasets.root)
         elif dataset_name.startswith("panoptic-multiview"):
             eval_dataset = PanopticStudioMultiViewDataset.from_name(dataset_name, cfg.datasets.root)
         elif dataset_name.startswith("dex-ycb-multiview"):

@@ -1,4 +1,5 @@
 from .dexycb_multiview_dataset import DexYCBMultiViewDataset
 from .kubric_multiview_dataset import KubricMultiViewDataset
+from .panoptic_human_trajectory_dataset import PanopticHumanTrajectoryDataset
 from .panoptic_studio_multiview_dataset import PanopticStudioMultiViewDataset
 from .tap_vid_datasets import TapVidDataset
