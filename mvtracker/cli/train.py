@@ -543,6 +543,42 @@ def main(cfg: DictConfig):
         train_dataset = None
     elif cfg.datasets.train.name.startswith("kubric-multiview-v3"):
         train_dataset = KubricMultiViewDataset.from_name(cfg.datasets.train.name, cfg.datasets.root, cfg, fabric)
+    elif cfg.datasets.train.name == "panoptic-human-training":
+        # Pure human training: only Panoptic sequences with SAM3D guidance
+        logging.info("Creating Panoptic human training dataset (basketball, boxes, football, juggle)")
+
+        # Training sequences only (test sequences are softball, tennis)
+        train_dataset = PanopticHumanTrajectoryDataset(
+            data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
+            views_to_return=[1, 7, 14, 20],  # 4-view setup
+            traj_per_sample=cfg.datasets.train.traj_per_sample,
+            seed=72,
+            max_videos=4,  # basketball, boxes, football, juggle
+            use_cached_tracks=False,
+        )
+        logging.info(f"Panoptic human training dataset: {len(train_dataset)} samples")
+    elif cfg.datasets.train.name == "mixed-kubric-panoptic-human":
+        # Mixed training: 80% Kubric synthetic + 20% Panoptic human tracks
+        logging.info("Creating mixed training dataset (Kubric + Panoptic human tracks)")
+
+        kubric_dataset = KubricMultiViewDataset.from_name(
+            "kubric-multiview-v3-training", cfg.datasets.root, cfg, fabric
+        )
+
+        # Training sequences: basketball, boxes, football, juggle
+        panoptic_train_seqs = ["basketball", "boxes", "football", "juggle"]
+        panoptic_dataset = PanopticHumanTrajectoryDataset(
+            data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
+            views_to_return=[1, 7, 14, 20],  # 4-view setup
+            traj_per_sample=384,
+            seed=72,
+            max_videos=len(panoptic_train_seqs),
+            use_cached_tracks=False,
+        )
+
+        # Mix datasets (natural ratio favors Kubric due to size difference)
+        train_dataset = torch.utils.data.ConcatDataset([kubric_dataset, panoptic_dataset])
+        logging.info(f"Mixed dataset: {len(kubric_dataset)} Kubric + {len(panoptic_dataset)} Panoptic = {len(train_dataset)} total")
     else:
         raise ValueError(f"Dataset {cfg.datasets.train.name} not supported for training")
 
@@ -621,7 +657,13 @@ def main(cfg: DictConfig):
                 fabric.load(restore_ckpt_path, state, strict=False)
             logging.info(f"Loaded checkpoint {restore_ckpt_path}")
         else:
-            fabric.load_raw(restore_ckpt_path, model)
+            # Load pre-trained weights (not a training checkpoint)
+            try:
+                fabric.load_raw(restore_ckpt_path, model, strict=True)
+            except RuntimeError as e:
+                logging.warning(f"Failed to load weights from {restore_ckpt_path} with strict=True: {e}. "
+                                f"Trying again with strict=False.")
+                fabric.load_raw(restore_ckpt_path, model, strict=False)
 
     tb_writer = SummaryWriter(log_dir=os.path.join(cfg.experiment_path, f"runs_{fabric.global_rank}"))
     if cfg.modes.eval_only or cfg.modes.validate_at_start:

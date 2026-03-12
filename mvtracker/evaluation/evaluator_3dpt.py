@@ -269,6 +269,8 @@ class Evaluator:
                                if datapoint.query_points is not None else None)
             query_points_3d = (datapoint.query_points_3d.clone().float().to(device)
                                if datapoint.query_points_3d is not None else None)
+            sam3d_joints_world = (datapoint.sam3d_joints_world.clone().float().to(device)
+                                  if datapoint.sam3d_joints_world is not None else None)
 
             # Non-per-view data
             gt_trajectories_3d_worldspace = datapoint.trajectory_3d
@@ -477,6 +479,7 @@ class Evaluator:
                 "query_points_3d": query_points_3d,
                 "intrs": intrs,
                 "extrs": extrs,
+                "sam3d_joints_world": sam3d_joints_world,
                 "save_debug_logs": should_save_forward_pass_logs,
                 "debug_logs_path": os.path.join(
                     log_dir, f"forward_pass__eval_{dataset_name}_step-{step}_seq-{datapoint_idx}",
@@ -531,7 +534,7 @@ class Evaluator:
             # Determine the evaluation setting
             if "kubric" in dataset_name:
                 evaluation_setting = "kubric-multiview"
-            elif "panoptic-multiview" in dataset_name:
+            elif "panoptic-multiview" in dataset_name or "panoptic-human" in dataset_name:
                 evaluation_setting = "panoptic-multiview"
             elif "dex-ycb" in dataset_name:
                 evaluation_setting = "dexycb-multiview"

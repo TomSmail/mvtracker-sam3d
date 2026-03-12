@@ -51,6 +51,8 @@ class Datapoint:
     novel_intrs: Optional[torch.Tensor] = torch.eye(3).unsqueeze(0)  # B, 3, 3
     novel_extrs: Optional[torch.Tensor] = None  # B, S, 4, 4
 
+    sam3d_joints_world: Optional[torch.Tensor] = None  # B, S, n_persons, 70, 3
+
 
 def collate_fn(batch):
     gotit = [gotit for _, gotit in batch]
@@ -116,6 +118,12 @@ def collate_fn(batch):
         novel_intrs = torch.stack([b.novel_intrs for b, _ in batch], dim=0)
         novel_extrs = torch.stack([b.novel_extrs for b, _ in batch], dim=0)
 
+    sam3d_joints_world = (
+        torch.stack([b.sam3d_joints_world for b, _ in batch], dim=0)
+        if batch[0][0].sam3d_joints_world is not None
+        else None
+    )
+
     return (
         Datapoint(
             video=video,
@@ -135,7 +143,8 @@ def collate_fn(batch):
             track_upscaling_factor=track_upscaling_factor,
             novel_video=novel_video,
             novel_intrs=novel_intrs,
-            novel_extrs=novel_extrs
+            novel_extrs=novel_extrs,
+            sam3d_joints_world=sam3d_joints_world
         ),
         gotit,
     )

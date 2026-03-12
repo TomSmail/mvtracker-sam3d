@@ -301,8 +301,13 @@ class MVTracker(nn.Module):
         assert extrs_square.shape == (B, V, S, 4, 4)
         assert extrs_inv.shape == (B, V, S, 4, 4)
 
-        # Reshape SAM3D joints from (B, S, 70, 3) → (B*S, 70, 3) to match point cloud batch dim
-        sam3d_joints_flat = sam3d_joints.reshape(B * S, 70, 3) if sam3d_joints is not None else None
+        # Reshape SAM3D joints from (B, S, n_persons, 70, 3) → (B*S, n_persons*70, 3) to match point cloud batch dim
+        # Flatten persons and joints dimensions to treat all body joints from all persons as anchor points
+        if sam3d_joints is not None:
+            B_s, S_s = sam3d_joints.shape[:2]
+            sam3d_joints_flat = sam3d_joints.reshape(B_s * S_s, -1, 3)
+        else:
+            sam3d_joints_flat = None
 
         fcorr_fns = {}
         for lvl in range(self.corr_n_levels):
@@ -857,15 +862,16 @@ class PointcloudCorrBlock:
                 # Compute joint-proximity soft-assignment vectors
                 tau = self.sam3d_bias_tau.abs() + 1e-6
                 joints = self.sam3d_joints.to(dtype=torch.float32)
+                n_joints = joints.shape[1]  # Total joints (n_persons * 70)
 
-                q_to_j = torch.cdist(coords_world_xyz.float(), joints)  # (B, M, 70)
-                w_q = torch.nn.functional.softmax(-q_to_j / tau, dim=-1)  # (B, M, 70)
+                q_to_j = torch.cdist(coords_world_xyz.float(), joints)  # (B, M, n_joints)
+                w_q = torch.nn.functional.softmax(-q_to_j / tau, dim=-1)  # (B, M, n_joints)
 
                 c_to_j = torch.cdist(
                     neighbor_xyz_fetch.reshape(self.B, M * k_fetch, 3).float(),
                     joints,
-                ).reshape(self.B, M, k_fetch, 70)  # (B, M, k_fetch, 70)
-                w_c = torch.nn.functional.softmax(-c_to_j / tau, dim=-1)  # (B, M, k_fetch, 70)
+                ).reshape(self.B, M, k_fetch, n_joints)  # (B, M, k_fetch, n_joints)
+                w_c = torch.nn.functional.softmax(-c_to_j / tau, dim=-1)  # (B, M, k_fetch, n_joints)
 
                 # Semantic distance between query and each candidate
                 sem_dist = torch.norm(w_q.unsqueeze(2) - w_c, dim=-1)  # (B, M, k_fetch)

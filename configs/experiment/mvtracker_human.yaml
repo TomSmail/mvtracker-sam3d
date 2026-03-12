@@ -5,9 +5,16 @@ defaults:
 experiment_path: ./logs/mvtracker_human
 
 datasets:
+  root: ./datasets
+  train:
+    name: panoptic-human-training
+    batch_size: 1
+    sequence_len: 24
+    traj_per_sample: 384
+    num_workers: 8
   eval:
     names:
-      # Human trajectory tracks from AnthroTAP data engine
+      # Human trajectory tracks from AnthroTAP data engine (test sequences)
       - panoptic-human-views1_7_14_20
       - panoptic-human-views27_16_14_8
       - panoptic-human-views1_4_7_11
@@ -15,3 +22,17 @@ datasets:
       - panoptic-multiview-views1_7_14_20
       - panoptic-multiview-views27_16_14_8
       - panoptic-multiview-views1_4_7_11
+    num_workers: 4
+    max_seq_len: 1000
+
+trainer:
+  num_steps: 50000
+  eval_freq: 5000
+  viz_freq: 5000
+  save_ckpt_freq: 2500
+
+logging:
+  log_wandb: false
+
+modes:
+  validate_at_start: false

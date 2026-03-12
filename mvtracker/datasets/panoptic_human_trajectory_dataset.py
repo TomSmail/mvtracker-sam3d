@@ -355,6 +355,28 @@ class PanopticHumanTrajectoryDataset(Dataset):
         segs = torch.ones((n_frames, 1, h, w))
         n_sel_views = rgbs.shape[0]
 
+        # Extract SAM3D joints (first 70 keypoints per person) from human_tracks.npz
+        # These are used to guide MVTracker's attention and point cloud
+        n_keypoints = int(tracks["n_keypoints"])
+        n_persons = int(tracks["n_persons"])
+        track_types = tracks["track_types"]  # 0=keypoint, 1=vertex
+
+        # Extract joint trajectories (world-space 3D)
+        joint_mask = track_types == 0  # keypoints only
+        joints_3d_world = traj3d_world[..., joint_mask, :]  # [T, 70*n_persons, 3]
+        joints_3d_world = joints_3d_world.reshape(n_frames, n_persons, n_keypoints, 3)  # [T, P, 70, 3]
+
+        # Apply same scene transformation as trajectories
+        joints_3d_world_homo = torch.cat([
+            torch.from_numpy(joints_3d_world),
+            torch.ones(n_frames, n_persons, n_keypoints, 1)
+        ], dim=-1).float()  # [T, P, 70, 4]
+
+        # Transform: scale, rotate
+        joints_3d_world_trans = joints_3d_world_homo[..., :3] * scale
+        joints_3d_world_trans = torch.einsum('ij,TPKj->TPKi', rot.float(), joints_3d_world_trans)
+        joints_3d_world_trans = joints_3d_world_trans + translate
+
         datapoint = Datapoint(
             video=rgbs,
             videodepth=depths_trans,
@@ -374,5 +396,6 @@ class PanopticHumanTrajectoryDataset(Dataset):
             novel_video=novel_rgbs,
             novel_intrs=novel_intrs,
             novel_extrs=novel_extrs_trans,
+            sam3d_joints_world=joints_3d_world_trans,  # [T, n_persons, 70, 3]
         )
         return datapoint
