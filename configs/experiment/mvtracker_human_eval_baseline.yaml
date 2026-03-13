@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human_eval_baseline
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_knn_bias: false  # Disable SAM3D - pure spatial kNN
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      # Human trajectory tracks from AnthroTAP data engine (test sequences)
+      - panoptic-human-views1_7_14_20
+      - panoptic-human-views27_16_14_8
+      - panoptic-human-views1_4_7_11
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false

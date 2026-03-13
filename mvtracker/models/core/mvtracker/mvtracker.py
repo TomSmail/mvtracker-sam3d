@@ -110,6 +110,8 @@ class MVTracker(nn.Module):
             corr_add_neighbor_offset=True,
             corr_add_neighbor_xyz=False,
             corr_filter_invalid_depth=False,
+            use_sam3d_knn_bias: bool = False,
+            sam3d_knn_overfetch: int = 4,
     ):
         super().__init__()
 
@@ -126,6 +128,11 @@ class MVTracker(nn.Module):
         self.corr_add_neighbor_offset = corr_add_neighbor_offset
         self.corr_add_neighbor_xyz = corr_add_neighbor_xyz
         self.corr_filter_invalid_depth = corr_filter_invalid_depth
+        self.use_sam3d_knn_bias = use_sam3d_knn_bias
+        self.sam3d_knn_overfetch = sam3d_knn_overfetch
+        if use_sam3d_knn_bias:
+            self.sam3d_bias_lambda = nn.Parameter(torch.tensor(0.1))
+            self.sam3d_bias_tau = nn.Parameter(torch.tensor(0.15))
         self.add_space_attn = add_space_attn
         self.updateformer_input_dim = (
             # The positional encoding of the 3D flow from t=i to t=0
@@ -258,6 +265,7 @@ class MVTracker(nn.Module):
             debug_logs_window_idx=None,
             save_rerun_logs: bool = False,
             rerun_fmap_coloring_fn: Optional[Callable] = None,
+            sam3d_joints: Optional[torch.Tensor] = None,
     ):
         B, V, S, D, H, W = fmaps.shape
         N = coords_init.shape[2]
@@ -293,6 +301,14 @@ class MVTracker(nn.Module):
         assert extrs_square.shape == (B, V, S, 4, 4)
         assert extrs_inv.shape == (B, V, S, 4, 4)
 
+        # Reshape SAM3D joints from (B, S, n_persons, 70, 3) → (B*S, n_persons*70, 3) to match point cloud batch dim
+        # Flatten persons and joints dimensions to treat all body joints from all persons as anchor points
+        if sam3d_joints is not None:
+            B_s, S_s = sam3d_joints.shape[:2]
+            sam3d_joints_flat = sam3d_joints.reshape(B_s * S_s, -1, 3)
+        else:
+            sam3d_joints_flat = None
+
         fcorr_fns = {}
         for lvl in range(self.corr_n_levels):
             pc = init_pointcloud_from_rgbd(
@@ -319,6 +335,11 @@ class MVTracker(nn.Module):
                 corr_add_neighbor_offset=self.corr_add_neighbor_offset,
                 corr_add_neighbor_xyz=self.corr_add_neighbor_xyz,
                 rerun_fmap_coloring_fn=rerun_fmap_coloring_fn,
+                sam3d_joints=sam3d_joints_flat,
+                use_sam3d_bias=self.use_sam3d_knn_bias,
+                sam3d_knn_overfetch=self.sam3d_knn_overfetch,
+                sam3d_bias_lambda=self.sam3d_bias_lambda if self.use_sam3d_knn_bias else None,
+                sam3d_bias_tau=self.sam3d_bias_tau if self.use_sam3d_knn_bias else None,
             )
 
         # Positional/time embeddings (keep shapes identical to before)
@@ -423,6 +444,7 @@ class MVTracker(nn.Module):
             debug_logs_path="",
             save_rerun_logs: bool = False,
             save_rerun_logs_output_rrd_path: Optional[str] = None,
+            sam3d_joints_world: Optional[torch.Tensor] = None,
             **kwargs,
     ):
         device = extrs.device
@@ -661,6 +683,10 @@ class MVTracker(nn.Module):
                     track_mask_current[:, -1:].repeat(1, self.S - S_local, 1, 1),
                 ], 1)
 
+            sam3d_seq = (
+                sam3d_joints_world[:, w_idx_start:w_idx_start + self.S]
+                if sam3d_joints_world is not None else None
+            )
             coords, vis, _ = self.forward_iteration(
                 fmaps=fmaps_seq,
                 depths=depths_seq,
@@ -677,6 +703,7 @@ class MVTracker(nn.Module):
                 debug_logs_window_idx=w_idx_start,
                 save_rerun_logs=save_rerun_logs,
                 rerun_fmap_coloring_fn=rerun_fmap_coloring_fn,
+                sam3d_joints=sam3d_seq,
             )
 
             if is_train:
@@ -778,6 +805,11 @@ class PointcloudCorrBlock:
             filter_invalid: bool = False,
             valid: Optional[torch.Tensor] = None,
             rerun_fmap_coloring_fn: Optional[Callable] = None,
+            sam3d_joints: Optional[torch.Tensor] = None,
+            use_sam3d_bias: bool = False,
+            sam3d_knn_overfetch: int = 4,
+            sam3d_bias_lambda=None,
+            sam3d_bias_tau=None,
     ):
         self.B, self.N, self.C = fvec.shape
         assert xyz.shape == (self.B, self.N, 3)
@@ -796,6 +828,11 @@ class PointcloudCorrBlock:
         self.filter_invalid = filter_invalid
         self.valid = valid
         self.rerun_fmap_coloring_fn = rerun_fmap_coloring_fn
+        self.sam3d_joints = sam3d_joints
+        self.use_sam3d_bias = use_sam3d_bias
+        self.sam3d_knn_overfetch = sam3d_knn_overfetch
+        self.sam3d_bias_lambda = sam3d_bias_lambda
+        self.sam3d_bias_tau = sam3d_bias_tau
 
     def corr_sample(
             self,
@@ -813,7 +850,39 @@ class PointcloudCorrBlock:
 
         # Find neighbors for each of the N target points
         if not self.filter_invalid:
-            neighbor_dists, neighbor_indices = knn(self.k, self.xyz, coords_world_xyz)
+            if self.use_sam3d_bias and self.sam3d_joints is not None:
+                # Over-fetch k' candidates, then re-rank by semantic proximity to SAM3D joints
+                k_fetch = self.k * self.sam3d_knn_overfetch
+                neighbor_dists, neighbor_indices = knn(k_fetch, self.xyz, coords_world_xyz)
+                # neighbor_dists, neighbor_indices: (B, M, k_fetch)
+
+                batch_idx_local = torch.arange(self.B, device=self.xyz.device)[:, None, None]
+                neighbor_xyz_fetch = self.xyz[batch_idx_local, neighbor_indices]  # (B, M, k_fetch, 3)
+
+                # Compute joint-proximity soft-assignment vectors
+                tau = self.sam3d_bias_tau.abs() + 1e-6
+                joints = self.sam3d_joints.to(dtype=torch.float32)
+                n_joints = joints.shape[1]  # Total joints (n_persons * 70)
+
+                q_to_j = torch.cdist(coords_world_xyz.float(), joints)  # (B, M, n_joints)
+                w_q = torch.nn.functional.softmax(-q_to_j / tau, dim=-1)  # (B, M, n_joints)
+
+                c_to_j = torch.cdist(
+                    neighbor_xyz_fetch.reshape(self.B, M * k_fetch, 3).float(),
+                    joints,
+                ).reshape(self.B, M, k_fetch, n_joints)  # (B, M, k_fetch, n_joints)
+                w_c = torch.nn.functional.softmax(-c_to_j / tau, dim=-1)  # (B, M, k_fetch, n_joints)
+
+                # Semantic distance between query and each candidate
+                sem_dist = torch.norm(w_q.unsqueeze(2) - w_c, dim=-1)  # (B, M, k_fetch)
+                adj_dists = neighbor_dists.float() + self.sam3d_bias_lambda * sem_dist
+
+                # Keep the top-k by adjusted distance
+                _, top_k_idx = torch.topk(adj_dists, self.k, dim=-1, largest=False)
+                neighbor_indices = neighbor_indices.gather(2, top_k_idx)
+                neighbor_dists = neighbor_dists.gather(2, top_k_idx)
+            else:
+                neighbor_dists, neighbor_indices = knn(self.k, self.xyz, coords_world_xyz)
         else:
             neighbor_dists = []
             neighbor_indices = []
