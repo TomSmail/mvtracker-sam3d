@@ -54,6 +54,7 @@ class EvaluationPredictor(torch.nn.Module):
             save_debug_logs=False,
             debug_logs_path="",
             query_points_view=None,
+            sam3d_joints_world=None,
             **kwargs,
     ):
         batch_size, num_views, num_frames, _, height_raw, width_raw = rgbs.shape
@@ -271,6 +272,7 @@ class EvaluationPredictor(torch.nn.Module):
                     save_debug_logs=save_debug_logs and point_idx == 0,
                     debug_logs_path=debug_logs_path,
                     query_points_view=query_points_view,
+                    sam3d_joints_world=sam3d_joints_world,
                     **kwargs,
                 )
                 traj_e[:, :, point_idx: point_idx + 1] = results_i["traj_e"][:, :, :1]
@@ -354,6 +356,7 @@ class EvaluationPredictor(torch.nn.Module):
                 save_debug_logs=save_debug_logs,
                 debug_logs_path=debug_logs_path,
                 query_points_view=query_points_view,
+                sam3d_joints_world=sam3d_joints_world,
                 **kwargs,
             )
             traj_e = results["traj_e"][:, :, :num_points, :]

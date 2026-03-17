@@ -1,0 +1,31 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_dexycb_eval_sam3d
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_knn_bias: true   # Enable SAM3D guidance
+  sam3d_knn_overfetch: 4     # Over-fetch 4x candidates for semantic re-ranking
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - dex-ycb-multiview-views0123-cached
+      - dex-ycb-multiview-views0123-removehand-cached
+    num_workers: 0
+    max_seq_len: 300
+    use_sam3d: true
+    sam3d_checkpoint_path: /cluster/home/tsmail/checkpoints/sam-3d-body-dinov3/model.ckpt
+    sam3d_mhr_path: /cluster/home/tsmail/checkpoints/sam-3d-body-dinov3/assets/mhr_model.pt
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false

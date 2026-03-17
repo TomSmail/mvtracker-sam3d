@@ -133,6 +133,26 @@ python -m mvtracker.cli.eval \
   experiment_path=logs/mvtracker model=mvtracker \
   datasets.eval.names=[panoptic-multiview-views1_7_14_20-cached]
 
+# Evaluate on DexYCB (hand-object occlusion) - SLURM scripts
+sbatch scripts/slurm/eval_dexycb_baseline.sh    # Baseline only
+sbatch scripts/slurm/eval_dexycb_sam3d.sh       # SAM3D only
+sbatch scripts/slurm/eval_dexycb_both.sh        # Both + comparison (recommended)
+
+# Or run directly with venv (no SLURM)
+source venv/bin/activate
+python -m mvtracker.cli.eval +experiment=mvtracker_dexycb_eval_baseline
+python -m mvtracker.cli.eval +experiment=mvtracker_dexycb_eval_sam3d
+
+# Compare DexYCB results manually
+python scripts/compare_eval_results.py \
+  --baseline logs/mvtracker_dexycb_eval_baseline \
+  --sam3d logs/mvtracker_dexycb_eval_sam3d \
+  --output dexycb_comparison.csv
+
+# Evaluate on EgoExo4D (inference-only, qualitative)
+python -m mvtracker.cli.eval +experiment=mvtracker_egoexo4d_eval_baseline
+python -m mvtracker.cli.eval +experiment=mvtracker_egoexo4d_eval_sam3d
+
 # Demo (saves mvtracker_demo.rrd, open at app.rerun.io)
 python demo.py --rerun save --lightweight
 ```

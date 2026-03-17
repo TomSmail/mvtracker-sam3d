@@ -189,6 +189,25 @@ class MVTracker(nn.Module):
         self.stats_pyramid = None
         self.stats_depth = None
 
+    def ensure_sam3d_parameters_initialized(self):
+        """
+        Ensure SAM3D bias parameters are properly initialized.
+
+        This is needed when loading checkpoints that were trained without SAM3D.
+        The parameters may be missing from the checkpoint state_dict, so we
+        re-initialize them here if needed.
+        """
+        if self.use_sam3d_knn_bias:
+            needs_init = (not hasattr(self, 'sam3d_bias_lambda') or
+                         self.sam3d_bias_lambda is None or
+                         not isinstance(self.sam3d_bias_lambda, nn.Parameter))
+            if needs_init:
+                device = next(self.parameters()).device
+                self.sam3d_bias_lambda = nn.Parameter(torch.tensor(0.1, device=device))
+                self.sam3d_bias_tau = nn.Parameter(torch.tensor(0.15, device=device))
+                return True  # Indicate that initialization was performed
+        return False
+
     def fnet_fwd(self, rgbs_normalized, image_features=None):
         b, v, t, _, h, w = rgbs_normalized.shape
         rgbs_normalized = rgbs_normalized.reshape(-1, 3, h, w)

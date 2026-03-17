@@ -20,7 +20,8 @@ from mvtracker.datasets.utils import Datapoint, transform_scene
 class DexYCBMultiViewDataset(Dataset):
 
     @staticmethod
-    def from_name(dataset_name: str, dataset_root: str):
+    def from_name(dataset_name: str, dataset_root: str, use_sam3d: bool = False,
+                  sam3d_checkpoint_path: str = None, sam3d_mhr_path: str = None):
         """
         Examples of datasets supported by this factory method:
         - "dex-ycb-multiview",
@@ -110,6 +111,9 @@ class DexYCBMultiViewDataset(Dataset):
             max_videos=10,
             perform_sanity_checks=False,
             use_cached_tracks=use_cached_tracks,
+            use_sam3d=use_sam3d,
+            sam3d_checkpoint_path=sam3d_checkpoint_path,
+            sam3d_mhr_path=sam3d_mhr_path,
         )
 
     def __init__(
@@ -126,6 +130,9 @@ class DexYCBMultiViewDataset(Dataset):
             max_videos=None,
             perform_sanity_checks=False,
             use_cached_tracks=False,
+            use_sam3d=False,
+            sam3d_checkpoint_path=None,
+            sam3d_mhr_path=None,
     ):
         super().__init__()
         self.data_root = data_root
@@ -139,9 +146,22 @@ class DexYCBMultiViewDataset(Dataset):
         self.seed = seed
         self.perform_sanity_checks = perform_sanity_checks
         self.use_cached_tracks = use_cached_tracks
+        self.use_sam3d = use_sam3d
+        self.sam3d_checkpoint_path = sam3d_checkpoint_path
+        self.sam3d_mhr_path = sam3d_mhr_path
         self.cache_name = self._cache_key()
         self.seq_names = self._get_sequence_names(max_videos)
         self.getitem_calls = 0
+
+        # Initialize SAM3D wrapper if enabled
+        self.sam3d_wrapper = None
+        if self.use_sam3d:
+            from mvtracker.datasets.sam3d_inference import get_sam3d_wrapper
+            self.sam3d_wrapper = get_sam3d_wrapper(
+                checkpoint_path=sam3d_checkpoint_path,
+                mhr_path=sam3d_mhr_path,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
 
     def _get_sequence_names(self, max_videos):
         """
@@ -544,6 +564,40 @@ class DexYCBMultiViewDataset(Dataset):
         # 82.7 91.1 --> 80.8 89.1
 
         segs = torch.ones((n_frames, 1, h, w))  # Dummy segmentation masks
+
+        # Run SAM3D inference if enabled
+        sam3d_joints_world = None
+        if self.use_sam3d and self.sam3d_wrapper is not None:
+            logging.info(f"Running SAM3D inference on {self.seq_names[index]}...")
+            try:
+                # Run SAM3D on the sequence (before scene transformation)
+                sam3d_joints_world = self.sam3d_wrapper.process_multiview_sequence(
+                    rgbs=rgbs,  # (V, T, 3, H, W)
+                    intrs=intrs,  # (V, T, 3, 3)
+                    extrs=extrs,  # (V, T, 3, 4)
+                    inference_type="body",
+                    bbox_thr=0.5,
+                )
+
+                if sam3d_joints_world is not None:
+                    # Apply same scene transformation as trajectories
+                    # sam3d_joints_world is [T, n_persons, 70, 3]
+                    T_sam, P_sam, K_sam = sam3d_joints_world.shape[:3]
+                    sam3d_flat = sam3d_joints_world.reshape(T_sam * P_sam * K_sam, 3)
+
+                    # Apply scale, rotation, translation
+                    sam3d_flat_trans = sam3d_flat * scale
+                    sam3d_flat_trans = torch.einsum('ij,nj->ni', rot.float(), sam3d_flat_trans)
+                    sam3d_flat_trans = sam3d_flat_trans + translation
+
+                    sam3d_joints_world = sam3d_flat_trans.reshape(T_sam, P_sam, K_sam, 3)
+                    logging.info(f"SAM3D inference succeeded: {P_sam} persons detected")
+                else:
+                    logging.warning(f"SAM3D inference returned no detections for {self.seq_names[index]}")
+            except Exception as e:
+                logging.error(f"SAM3D inference failed on {self.seq_names[index]}: {e}")
+                sam3d_joints_world = None
+
         datapoint = Datapoint(
             video=rgbs,
             videodepth=depths_trans,
@@ -565,6 +619,7 @@ class DexYCBMultiViewDataset(Dataset):
             novel_video=novel_rgbs,
             novel_intrs=novel_intrs,
             novel_extrs=novel_extrs_trans,
+            sam3d_joints_world=sam3d_joints_world,
         )
         return datapoint
 

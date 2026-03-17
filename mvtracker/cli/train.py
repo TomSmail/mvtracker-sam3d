@@ -420,11 +420,24 @@ def main(cfg: DictConfig):
         elif dataset_name.startswith("panoptic-multiview"):
             eval_dataset = PanopticStudioMultiViewDataset.from_name(dataset_name, cfg.datasets.root)
         elif dataset_name.startswith("dex-ycb-multiview"):
-            eval_dataset = DexYCBMultiViewDataset.from_name(dataset_name, cfg.datasets.root)
-        elif dataset_name == "egoexo4d":
+            use_sam3d = getattr(cfg.datasets.eval, 'use_sam3d', False)
+            sam3d_checkpoint_path = getattr(cfg.datasets.eval, 'sam3d_checkpoint_path', None)
+            sam3d_mhr_path = getattr(cfg.datasets.eval, 'sam3d_mhr_path', None)
+            eval_dataset = DexYCBMultiViewDataset.from_name(
+                dataset_name, cfg.datasets.root,
+                use_sam3d=use_sam3d,
+                sam3d_checkpoint_path=sam3d_checkpoint_path,
+                sam3d_mhr_path=sam3d_mhr_path,
+            )
+        elif dataset_name.startswith("egoexo4d"):
+            # Support pattern matching with optional modifiers
+            dataset_root = cfg.datasets.root if hasattr(cfg.datasets, 'root') else "datasets"
+
             eval_dataset = GenericSceneDataset(
-                dataset_dir="datasets/egoexo4d-processed/maxframes-300_downsample-1_downscale-512/",
+                dataset_dir=os.path.join(dataset_root, "egoexo4d-processed/maxframes-300_downsample-1_downscale-512/"),
                 drop_first_n_frames=44,
+                use_duster_depths=True,
+                scene_normalization_mode="auto",
             )
         elif dataset_name == "4d-dress":
             eval_dataset = GenericSceneDataset(
@@ -664,6 +677,22 @@ def main(cfg: DictConfig):
                 logging.warning(f"Failed to load weights from {restore_ckpt_path} with strict=True: {e}. "
                                 f"Trying again with strict=False.")
                 fabric.load_raw(restore_ckpt_path, model, strict=False)
+
+        # Initialize SAM3D bias parameters if they're missing from the checkpoint
+        logging.info("=== POST-CHECKPOINT LOAD: Checking SAM3D parameters ===")
+        # Access the underlying module (unwrap DDP or Fabric wrappers)
+        if hasattr(model, 'module'):
+            underlying_model = model.module  # DistributedDataParallel
+        elif hasattr(model, '_forward_module'):
+            underlying_model = model._forward_module  # Fabric wrapper
+        else:
+            underlying_model = model
+
+        if hasattr(underlying_model, 'ensure_sam3d_parameters_initialized'):
+            if underlying_model.ensure_sam3d_parameters_initialized():
+                logging.info("Initialized SAM3D bias parameters (missing from checkpoint):")
+                logging.info(f"  sam3d_bias_lambda = {underlying_model.sam3d_bias_lambda.item():.3f}")
+                logging.info(f"  sam3d_bias_tau = {underlying_model.sam3d_bias_tau.item():.3f}")
 
     tb_writer = SummaryWriter(log_dir=os.path.join(cfg.experiment_path, f"runs_{fabric.global_rank}"))
     if cfg.modes.eval_only or cfg.modes.validate_at_start:
