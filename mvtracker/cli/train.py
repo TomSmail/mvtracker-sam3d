@@ -141,6 +141,71 @@ def resize_batch_to_fit(batch, target_h, target_w):
     return batch
 
 
+def subsample_batch_frames(batch, max_frames):
+    """Subsample a Datapoint to at most max_frames, evenly spaced.
+
+    Remaps query_points_3d frame indices to the new frame numbering.
+    """
+    T = batch.video.shape[2]  # (B, V, T, C, H, W)
+    if T <= max_frames:
+        return batch
+
+    frame_idx = torch.linspace(0, T - 1, max_frames).long()
+    old_to_new = torch.full((T,), -1, dtype=torch.long, device=batch.video.device)
+    old_to_new[frame_idx] = torch.arange(max_frames, device=batch.video.device)
+
+    batch.video = batch.video[:, :, frame_idx]
+    batch.videodepth = batch.videodepth[:, :, frame_idx]
+
+    if batch.intrs is not None and batch.intrs.dim() == 5:  # (B, V, T, 3, 3)
+        batch.intrs = batch.intrs[:, :, frame_idx]
+    if batch.extrs is not None and batch.extrs.dim() == 5:  # (B, V, T, 3, 4)
+        batch.extrs = batch.extrs[:, :, frame_idx]
+
+    if batch.trajectory is not None:  # (B, V, T, N, 3)
+        batch.trajectory = batch.trajectory[:, :, frame_idx]
+    if batch.trajectory_3d is not None:  # (B, T, N, 3)
+        batch.trajectory_3d = batch.trajectory_3d[:, frame_idx]
+    if batch.visibility is not None:  # (B, V, T, N)
+        batch.visibility = batch.visibility[:, :, frame_idx]
+    if batch.valid is not None:  # (B, T, N)
+        batch.valid = batch.valid[:, frame_idx]
+
+    if batch.segmentation is not None:
+        # Could be (B, T, 1, H, W) or (T, 1, H, W)
+        if batch.segmentation.dim() == 5:
+            batch.segmentation = batch.segmentation[:, frame_idx]
+        elif batch.segmentation.dim() == 4:
+            batch.segmentation = batch.segmentation[frame_idx]
+
+    if batch.sam3d_joints_world is not None:  # (B, T, P, 70, 3)
+        batch.sam3d_joints_world = batch.sam3d_joints_world[:, frame_idx]
+
+    # Remap query_points_3d frame indices: (B, N, 4) where [:, :, 0] is frame_idx
+    if batch.query_points_3d is not None:
+        qp = batch.query_points_3d.clone()
+        old_t = qp[:, :, 0].long()
+        # Snap each query frame to the nearest subsampled frame
+        new_t = old_to_new[old_t]
+        needs_snap = new_t < 0
+        if needs_snap.any():
+            # Find nearest valid frame
+            for b in range(qp.shape[0]):
+                for n in range(qp.shape[1]):
+                    if needs_snap[b, n]:
+                        dists = (frame_idx - old_t[b, n].cpu()).abs()
+                        nearest = frame_idx[dists.argmin()]
+                        new_t[b, n] = old_to_new[nearest]
+                        # Update the 3D position to match the snapped frame
+                        if batch.trajectory_3d is not None:
+                            qp[b, n, 1:] = batch.trajectory_3d[b, new_t[b, n], n]
+        qp[:, :, 0] = new_t.float()
+        batch.query_points_3d = qp
+
+    logging.info(f"Subsampled frames from {T} to {max_frames}")
+    return batch
+
+
 def forward_batch_multi_view(batch, model, cfg, step, train_iters, gamma, save_debug_logs=False, debug_logs_path=''):
     # Per view data
     rgbs = batch.video
@@ -824,6 +889,9 @@ def main(cfg: DictConfig):
             if hasattr(cfg.augmentations, 'cropping_size') and cfg.augmentations.cropping_size is not None:
                 target_h, target_w = cfg.augmentations.cropping_size
                 batch = resize_batch_to_fit(batch, target_h, target_w)
+            seq_len = cfg.datasets.train.sequence_len
+            if seq_len is not None:
+                batch = subsample_batch_frames(batch, seq_len)
             assert model.training
 
             start_time_2 = time.time()
