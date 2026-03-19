@@ -48,6 +48,7 @@ import logging
 import os
 
 import torch
+import torch.nn.functional as F
 import time
 from collections import deque
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -88,6 +89,54 @@ def fetch_optimizer(trainer_cfg, model):
         )
 
     return optimizer, scheduler
+
+
+def resize_batch_to_fit(batch, target_h, target_w):
+    """Resize a Datapoint's spatial dimensions to (target_h, target_w).
+
+    Rescales video, videodepth, intrinsics, and 2D trajectories.
+    """
+    B, V, T, C, H, W = batch.video.shape
+    if H == target_h and W == target_w:
+        return batch
+
+    sy = target_h / H
+    sx = target_w / W
+
+    # Resize video: (B, V, T, 3, H, W) -> (B*V*T, 3, tH, tW)
+    video = batch.video.reshape(B * V * T, C, H, W)
+    video = F.interpolate(video, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    batch.video = video.reshape(B, V, T, C, target_h, target_w)
+
+    # Resize depth: (B, V, T, 1, H, W)
+    depth = batch.videodepth.reshape(B * V * T, 1, H, W)
+    depth = F.interpolate(depth, size=(target_h, target_w), mode='nearest')
+    batch.videodepth = depth.reshape(B, V, T, 1, target_h, target_w)
+
+    # Scale intrinsics: fx, fy, cx, cy
+    intrs = batch.intrs.clone()
+    intrs[..., 0, 0] *= sx  # fx
+    intrs[..., 1, 1] *= sy  # fy
+    intrs[..., 0, 2] *= sx  # cx
+    intrs[..., 1, 2] *= sy  # cy
+    batch.intrs = intrs
+
+    # Scale 2D trajectories (pixel-space x, y; keep z unchanged)
+    if batch.trajectory is not None:
+        traj = batch.trajectory.clone()
+        traj[..., 0] *= sx  # x
+        traj[..., 1] *= sy  # y
+        batch.trajectory = traj
+
+    # Resize segmentation if present
+    if batch.segmentation is not None:
+        T_seg, C_seg, H_seg, W_seg = batch.segmentation.shape
+        if H_seg == H and W_seg == W:
+            seg = F.interpolate(batch.segmentation.float(), size=(target_h, target_w), mode='nearest')
+            batch.segmentation = seg
+
+    logging.info(f"Resized batch from ({H}, {W}) to ({target_h}, {target_w})")
+    return batch
 
 
 def forward_batch_multi_view(batch, model, cfg, step, train_iters, gamma, save_debug_logs=False, debug_logs_path=''):
@@ -770,6 +819,9 @@ def main(cfg: DictConfig):
 
             i_batch += 1
             dataclass_to_cuda_(batch)
+            if hasattr(cfg.augmentations, 'cropping_size') and cfg.augmentations.cropping_size is not None:
+                target_h, target_w = cfg.augmentations.cropping_size
+                batch = resize_batch_to_fit(batch, target_h, target_w)
             assert model.training
 
             start_time_2 = time.time()
