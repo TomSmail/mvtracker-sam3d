@@ -1,0 +1,44 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_finetune_sam3d
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_knn_bias: true
+  sam3d_knn_overfetch: 4
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  train:
+    name: panoptic-human-training
+    batch_size: 1
+    sequence_len: 24
+    traj_per_sample: 384
+    num_workers: 8
+  eval:
+    names:
+      - panoptic-human-views1_7_14_20
+      - panoptic-human-views27_16_14_8
+      - panoptic-human-views1_4_7_11
+    num_workers: 0
+    max_seq_len: 100
+
+trainer:
+  finetune_sam3d_only: true
+  sam3d_lr: 0.001
+  num_steps: 5000
+  eval_freq: 500
+  viz_freq: 500
+  save_ckpt_freq: 500
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false
+
+augmentations:
+  cropping_size: [384, 512]
+
+modes:
+  validate_at_start: false

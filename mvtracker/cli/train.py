@@ -55,11 +55,25 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 def fetch_optimizer(trainer_cfg, model):
     """Create the optimizer and learning rate scheduler"""
-    optimizer = optim.AdamW(model.parameters(), lr=trainer_cfg.lr, weight_decay=trainer_cfg.wdecay)
+    if getattr(trainer_cfg, 'finetune_sam3d_only', False):
+        for param in model.parameters():
+            param.requires_grad = False
+        sam3d_params = []
+        for name, param in model.named_parameters():
+            if 'sam3d_bias' in name:
+                param.requires_grad = True
+                sam3d_params.append(param)
+        assert len(sam3d_params) > 0, "No SAM3D bias params found — is use_sam3d_knn_bias enabled?"
+        lr = getattr(trainer_cfg, 'sam3d_lr', trainer_cfg.lr)
+        logging.info(f"Finetuning SAM3D only: {len(sam3d_params)} params, lr={lr}")
+        optimizer = optim.AdamW(sam3d_params, lr=lr, weight_decay=trainer_cfg.wdecay)
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=trainer_cfg.lr, weight_decay=trainer_cfg.wdecay)
+    max_lr = getattr(trainer_cfg, 'sam3d_lr', trainer_cfg.lr) if getattr(trainer_cfg, 'finetune_sam3d_only', False) else trainer_cfg.lr
     if trainer_cfg.anneal_strategy in ["linear", "cos"]:
         scheduler = optim.lr_scheduler.OneCycleLR(
             optimizer,
-            trainer_cfg.lr,
+            max_lr,
             trainer_cfg.num_steps + 100,
             pct_start=0.05,
             cycle_momentum=False,
@@ -903,6 +917,10 @@ def main(cfg: DictConfig):
                 if len(output) > 1:
                     tb_writer.add_scalar(f"live_total_loss", loss.item(), total_steps)
                 tb_writer.add_scalar(f"learning_rate", optimizer.param_groups[0]["lr"], total_steps)
+                if getattr(cfg.trainer, 'finetune_sam3d_only', False):
+                    for name, param in model.named_parameters():
+                        if 'sam3d_bias' in name:
+                            tb_writer.add_scalar(f"sam3d/{name}", param.item(), total_steps)
 
             if total_steps % cfg.trainer.save_ckpt_freq == 0:
                 ckpt_iter = "0" * (6 - len(str(total_steps))) + str(total_steps)

@@ -875,12 +875,17 @@ class PointcloudCorrBlock:
 
                 # Semantic distance between query and each candidate
                 sem_dist = torch.norm(w_q.unsqueeze(2) - w_c, dim=-1)  # (B, M, k_fetch)
-                adj_dists = neighbor_dists.float() + self.sam3d_bias_lambda * sem_dist
+                adj_dists = neighbor_dists.float() + self.sam3d_bias_lambda.abs() * sem_dist
 
-                # Keep the top-k by adjusted distance
+                # Keep the top-k by adjusted distance (discrete selection, no grad)
                 _, top_k_idx = torch.topk(adj_dists, self.k, dim=-1, largest=False)
                 neighbor_indices = neighbor_indices.gather(2, top_k_idx)
                 neighbor_dists = neighbor_dists.gather(2, top_k_idx)
+
+                # Compute differentiable semantic weights for the selected neighbors
+                # so that lambda and tau have a gradient path through the correlation
+                sel_sem_dist = sem_dist.gather(2, top_k_idx)  # (B, M, k)
+                self._sam3d_corr_weights = torch.exp(-self.sam3d_bias_lambda.abs() * sel_sem_dist / (tau + 1e-6))  # (B, M, k)
             else:
                 neighbor_dists, neighbor_indices = knn(self.k, self.xyz, coords_world_xyz)
         else:
@@ -902,6 +907,10 @@ class PointcloudCorrBlock:
         neighbor_fvec_grouped = neighbor_fvec.view(self.B, M, self.k, self.groups, -1)
         corrs = torch.einsum('BMGc,BMKGc->BMKG', targets_grouped, neighbor_fvec_grouped)
         corrs = corrs / ((self.C / self.groups) ** 0.5)
+
+        # Apply differentiable SAM3D semantic weights to correlations
+        if self.use_sam3d_bias and hasattr(self, '_sam3d_corr_weights'):
+            corrs = corrs * self._sam3d_corr_weights.unsqueeze(-1)  # (B, M, k, G) * (B, M, k, 1)
 
         output = corrs
 
