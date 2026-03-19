@@ -130,10 +130,12 @@ def resize_batch_to_fit(batch, target_h, target_w):
 
     # Resize segmentation if present
     if batch.segmentation is not None:
-        T_seg, C_seg, H_seg, W_seg = batch.segmentation.shape
+        seg_shape = batch.segmentation.shape
+        H_seg, W_seg = seg_shape[-2], seg_shape[-1]
         if H_seg == H and W_seg == W:
-            seg = F.interpolate(batch.segmentation.float(), size=(target_h, target_w), mode='nearest')
-            batch.segmentation = seg
+            seg = batch.segmentation.reshape(-1, 1, H_seg, W_seg).float()
+            seg = F.interpolate(seg, size=(target_h, target_w), mode='nearest')
+            batch.segmentation = seg.reshape(*seg_shape[:-2], target_h, target_w)
 
     logging.info(f"Resized batch from ({H}, {W}) to ({target_h}, {target_w})")
     return batch
