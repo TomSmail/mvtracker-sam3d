@@ -202,6 +202,28 @@ def subsample_batch_frames(batch, max_frames):
         qp[:, :, 0] = new_t.float()
         batch.query_points_3d = qp
 
+    # Filter out tracks that lost all visible frames after subsampling
+    if batch.visibility is not None:
+        # visibility: (B, V, T, N) → visible in any view: (B, T, N)
+        vis_any_view = batch.visibility.any(dim=1)  # (B, T, N)
+        has_vis = vis_any_view.any(dim=1)  # (B, N)
+        # Only filter if some tracks are invisible (and we have more than a few left)
+        if not has_vis.all():
+            # Use the mask from batch 0 (batch_size=1 in finetuning)
+            keep = has_vis[0]  # (N,)
+            n_keep = keep.sum().item()
+            if n_keep > 0:
+                logging.info(f"Filtering tracks: keeping {n_keep}/{keep.shape[0]} visible after subsampling")
+                if batch.trajectory is not None:
+                    batch.trajectory = batch.trajectory[:, :, :, keep]
+                if batch.trajectory_3d is not None:
+                    batch.trajectory_3d = batch.trajectory_3d[:, :, keep]
+                batch.visibility = batch.visibility[:, :, :, keep]
+                if batch.valid is not None:
+                    batch.valid = batch.valid[:, :, keep]
+                if batch.query_points_3d is not None:
+                    batch.query_points_3d = batch.query_points_3d[:, keep]
+
     logging.info(f"Subsampled frames from {T} to {max_frames}")
     return batch
 
