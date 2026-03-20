@@ -17,7 +17,7 @@ from mvtracker.models.core.embeddings import (
     get_1d_sincos_pos_embed_from_grid,
     get_3d_embedding,
 )
-from mvtracker.models.core.model_utils import smart_cat, init_pointcloud_from_rgbd, save_pointcloud_to_ply
+from mvtracker.models.core.model_utils import smart_cat, init_pointcloud_from_rgbd, save_pointcloud_to_ply, augment_pointcloud_with_mesh_vertices
 from mvtracker.models.core.spatracker.blocks import BasicEncoder
 from mvtracker.utils.basic import time_now
 
@@ -112,6 +112,7 @@ class MVTracker(nn.Module):
             corr_filter_invalid_depth=False,
             use_sam3d_knn_bias: bool = False,
             sam3d_knn_overfetch: int = 4,
+            use_sam3d_pointcloud_augmentation: bool = False,
     ):
         super().__init__()
 
@@ -130,6 +131,7 @@ class MVTracker(nn.Module):
         self.corr_filter_invalid_depth = corr_filter_invalid_depth
         self.use_sam3d_knn_bias = use_sam3d_knn_bias
         self.sam3d_knn_overfetch = sam3d_knn_overfetch
+        self.use_sam3d_pointcloud_augmentation = use_sam3d_pointcloud_augmentation
         if use_sam3d_knn_bias:
             self.sam3d_bias_lambda = nn.Parameter(torch.tensor(0.1))
             self.sam3d_bias_tau = nn.Parameter(torch.tensor(0.15))
@@ -266,6 +268,7 @@ class MVTracker(nn.Module):
             save_rerun_logs: bool = False,
             rerun_fmap_coloring_fn: Optional[Callable] = None,
             sam3d_joints: Optional[torch.Tensor] = None,
+            sam3d_vertices: Optional[torch.Tensor] = None,
     ):
         B, V, S, D, H, W = fmaps.shape
         N = coords_init.shape[2]
@@ -325,6 +328,33 @@ class MVTracker(nn.Module):
             else:
                 pc_xyz, pc_fvec = pc
                 pc_valid = None
+
+            # Augment point cloud with SAM3D mesh vertices
+            if self.use_sam3d_pointcloud_augmentation and sam3d_vertices is not None:
+                if pc_valid is not None:
+                    pc_xyz, pc_fvec, pc_valid = augment_pointcloud_with_mesh_vertices(
+                        pointcloud_xyz=pc_xyz,
+                        pointcloud_fvec=pc_fvec,
+                        mesh_vertices=sam3d_vertices,
+                        fmaps=fmaps,
+                        intrs=intrs,
+                        extrs=extrs,
+                        stride=self.stride,
+                        level=lvl,
+                        pointcloud_valid=pc_valid,
+                    )
+                else:
+                    pc_xyz, pc_fvec = augment_pointcloud_with_mesh_vertices(
+                        pointcloud_xyz=pc_xyz,
+                        pointcloud_fvec=pc_fvec,
+                        mesh_vertices=sam3d_vertices,
+                        fmaps=fmaps,
+                        intrs=intrs,
+                        extrs=extrs,
+                        stride=self.stride,
+                        level=lvl,
+                    )
+
             fcorr_fns[lvl] = PointcloudCorrBlock(
                 k=self.corr_neighbors,
                 groups=self.corr_n_groups,
@@ -445,6 +475,7 @@ class MVTracker(nn.Module):
             save_rerun_logs: bool = False,
             save_rerun_logs_output_rrd_path: Optional[str] = None,
             sam3d_joints_world: Optional[torch.Tensor] = None,
+            sam3d_vertices_world: Optional[torch.Tensor] = None,
             **kwargs,
     ):
         device = extrs.device
@@ -687,6 +718,17 @@ class MVTracker(nn.Module):
                 sam3d_joints_world[:, w_idx_start:w_idx_start + self.S]
                 if sam3d_joints_world is not None else None
             )
+            sam3d_verts_seq = None
+            if sam3d_vertices_world is not None:
+                sam3d_verts_seq = sam3d_vertices_world[:, w_idx_start:w_idx_start + self.S]
+                if S_local < self.S:
+                    diff = self.S - sam3d_verts_seq.shape[1]
+                    sam3d_verts_seq = torch.cat([
+                        sam3d_verts_seq,
+                        sam3d_verts_seq[:, -1:].repeat(1, diff, 1, 1),
+                    ], dim=1)
+                sam3d_verts_seq = sam3d_verts_seq.reshape(batch_size * self.S, -1, 3)
+
             coords, vis, _ = self.forward_iteration(
                 fmaps=fmaps_seq,
                 depths=depths_seq,
@@ -704,6 +746,7 @@ class MVTracker(nn.Module):
                 save_rerun_logs=save_rerun_logs,
                 rerun_fmap_coloring_fn=rerun_fmap_coloring_fn,
                 sam3d_joints=sam3d_seq,
+                sam3d_vertices=sam3d_verts_seq,
             )
 
             if is_train:
