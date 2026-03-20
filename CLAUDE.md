@@ -160,6 +160,33 @@ pip install "git+https://github.com/ethz-vlg/pointcept.git@2082918#subdirectory=
 
 Config system: **Hydra** (`configs/`), training runner: **Lightning Fabric**. kNN search has a pure-PyTorch fallback (`torch.cdist + topk`) when `pointops` is unavailable.
 
+### Running Python on the Euler Cluster
+
+The project uses a **venv** at `venv/` (not conda). To run Python scripts:
+
+```bash
+# Interactive shell — activate the venv first
+source venv/bin/activate
+python -m mvtracker.cli.train +experiment=mvtracker_overfit_mini
+
+# Or invoke directly without activating
+./venv/bin/python -m mvtracker.cli.train +experiment=mvtracker_overfit_mini
+```
+
+**SLURM jobs** (see `scripts/slurm/` for examples) must load modules before activating:
+
+```bash
+module load stack/2024-06 gcc/12.2.0 python_cuda/3.11.6
+source $DIR/venv/bin/activate
+```
+
+**Key details:**
+- System python is `/usr/bin/python3` — this does NOT have project dependencies
+- The venv python is `venv/bin/python` (Python 3.11.6, PyTorch 2.3.1+cu121)
+- `conda` is **not installed** on this cluster; all deps are in the venv
+- GPU jobs require SLURM (`sbatch scripts/slurm/<script>.sh`); login nodes have no GPUs
+- Use `--gres=gpumem:80g` for full training, `--gres=gpumem:24g` for overfit tests
+
 ---
 
 ## Important Notes
