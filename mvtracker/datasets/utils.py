@@ -52,6 +52,7 @@ class Datapoint:
     novel_extrs: Optional[torch.Tensor] = None  # B, S, 4, 4
 
     sam3d_joints_world: Optional[torch.Tensor] = None  # B, S, n_persons, 70, 3
+    sam3d_vertices_world: Optional[torch.Tensor] = None  # B, T, n_verts_total, 3
 
 
 def collate_fn(batch):
@@ -124,6 +125,12 @@ def collate_fn(batch):
         else None
     )
 
+    sam3d_vertices_world = (
+        torch.stack([b.sam3d_vertices_world for b, _ in batch], dim=0)
+        if batch[0][0].sam3d_vertices_world is not None
+        else None
+    )
+
     return (
         Datapoint(
             video=video,
@@ -144,7 +151,8 @@ def collate_fn(batch):
             novel_video=novel_video,
             novel_intrs=novel_intrs,
             novel_extrs=novel_extrs,
-            sam3d_joints_world=sam3d_joints_world
+            sam3d_joints_world=sam3d_joints_world,
+            sam3d_vertices_world=sam3d_vertices_world,
         ),
         gotit,
     )

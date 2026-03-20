@@ -129,6 +129,7 @@ def forward_batch_multi_view(batch, model, cfg, step, train_iters, gamma, save_d
         save_debug_logs=save_debug_logs,
         debug_logs_path=debug_logs_path,
         sam3d_joints_world=getattr(batch, 'sam3d_joints_world', None),
+        sam3d_vertices_world=getattr(batch, 'sam3d_vertices_world', None),
     )
     pred_trajectories = results["traj_e"]
     pred_visibilities = results["vis_e"]

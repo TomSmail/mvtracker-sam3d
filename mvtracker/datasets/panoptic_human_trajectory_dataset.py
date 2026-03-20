@@ -377,6 +377,18 @@ class PanopticHumanTrajectoryDataset(Dataset):
         joints_3d_world_trans = torch.einsum('ij,TPKj->TPKi', rot.float(), joints_3d_world_trans)
         joints_3d_world_trans = joints_3d_world_trans + translate
 
+        # Extract vertex trajectories (world-space 3D) for point cloud augmentation
+        vertex_mask = track_types == 1  # vertices only
+        if vertex_mask.any():
+            vertices_3d_world = traj3d_world[..., vertex_mask, :]  # [T, n_verts_total, 3]
+            vertices_3d_world_t = torch.from_numpy(vertices_3d_world).float()
+            # Apply same scene transformation
+            vertices_3d_world_trans = vertices_3d_world_t * scale
+            vertices_3d_world_trans = torch.einsum('ij,TNj->TNi', rot.float(), vertices_3d_world_trans)
+            vertices_3d_world_trans = vertices_3d_world_trans + translate
+        else:
+            vertices_3d_world_trans = None
+
         datapoint = Datapoint(
             video=rgbs,
             videodepth=depths_trans,
@@ -397,5 +409,6 @@ class PanopticHumanTrajectoryDataset(Dataset):
             novel_intrs=novel_intrs,
             novel_extrs=novel_extrs_trans,
             sam3d_joints_world=joints_3d_world_trans,  # [T, n_persons, 70, 3]
+            sam3d_vertices_world=vertices_3d_world_trans,  # [T, n_verts_total, 3] or None
         )
         return datapoint
