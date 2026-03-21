@@ -86,6 +86,8 @@ class PanopticHumanTrajectoryDataset(Dataset):
             seed=72,
             max_videos=6,
             use_cached_tracks=use_cached_tracks,
+            crop_size=None,
+            seq_len=None,
         )
 
     def __init__(
@@ -97,6 +99,8 @@ class PanopticHumanTrajectoryDataset(Dataset):
         seed=None,
         max_videos=None,
         use_cached_tracks=False,
+        crop_size=None,
+        seq_len=None,
     ):
         super().__init__()
         self.data_root = data_root
@@ -105,6 +109,8 @@ class PanopticHumanTrajectoryDataset(Dataset):
         self.traj_per_sample = traj_per_sample
         self.seed = seed
         self.use_cached_tracks = use_cached_tracks
+        self.crop_size = crop_size  # (H, W) tuple or None
+        self.seq_len = seq_len  # max frames to use, or None for all
         self.cache_name = self._cache_key()
         self.seq_names = self._get_sequence_names(max_videos)
         self.getitem_calls = 0
@@ -194,7 +200,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
             views[v] = {"rgb": np.stack(rgb_images), "depth": depth}
 
         rgbs = np.stack([views[v]["rgb"] for v in views_to_return])
-        n_views, n_frames, h, w, _ = rgbs.shape
+        n_views, n_frames_total, h, w, _ = rgbs.shape
 
         # Load depths (from dynamic3dgs or zeros)
         depth_list = []
@@ -202,8 +208,51 @@ class PanopticHumanTrajectoryDataset(Dataset):
             if views[v]["depth"] is not None:
                 depth_list.append(views[v]["depth"])
             else:
-                depth_list.append(np.zeros((n_frames, h, w)))
+                depth_list.append(np.zeros((n_frames_total, h, w)))
         depths = np.stack(depth_list)[..., None].astype(np.float32)
+
+        # Frame subsampling: pick a random contiguous window of seq_len frames
+        if self.seq_len is not None and self.seq_len < n_frames_total:
+            max_start = n_frames_total - self.seq_len
+            t0 = torch.randint(0, max_start + 1, (1,), generator=rnd_torch).item()
+            t1 = t0 + self.seq_len
+            frame_inds = slice(t0, t1)
+            rgbs = rgbs[:, frame_inds]
+            depths = depths[:, frame_inds]
+            traj3d_world = traj3d_world[frame_inds]
+            traj2d = traj2d[:, frame_inds]
+            visibility = visibility[:, frame_inds]
+            track_valid = track_valid[frame_inds]
+            if self.novel_views is not None:
+                for v in self.novel_views:
+                    views[v]["rgb"] = views[v]["rgb"][frame_inds]
+        n_frames = rgbs.shape[1]
+
+        # Image resizing
+        if self.crop_size is not None:
+            target_h, target_w = self.crop_size
+            scale_h = target_h / h
+            scale_w = target_w / w
+            # Resize rgbs: (V, T, H, W, 3) -> (V, T, target_h, target_w, 3)
+            rgbs_resized = np.zeros((n_views, n_frames, target_h, target_w, 3), dtype=rgbs.dtype)
+            depths_resized = np.zeros((n_views, n_frames, target_h, target_w, 1), dtype=depths.dtype)
+            for vi in range(n_views):
+                for ti in range(n_frames):
+                    rgbs_resized[vi, ti] = cv2.resize(rgbs[vi, ti], (target_w, target_h))
+                    depths_resized[vi, ti, :, :, 0] = cv2.resize(
+                        depths[vi, ti, :, :, 0], (target_w, target_h), interpolation=cv2.INTER_NEAREST
+                    )
+            rgbs = rgbs_resized
+            depths = depths_resized
+            # Scale intrinsics
+            intrs = intrs.copy()
+            intrs[:, 0, :] *= scale_w  # fx, cx
+            intrs[:, 1, :] *= scale_h  # fy, cy
+            # Scale 2D trajectories
+            traj2d = traj2d.copy()
+            traj2d[..., 0] *= scale_w
+            traj2d[..., 1] *= scale_h
+            h, w = target_h, target_w
 
         intrs_sel = np.stack([intrs[v] for v in views_to_return])[:, None, :, :].repeat(n_frames, axis=1)
 
@@ -295,7 +344,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
             visibility_t = visibility_t[:, :, inds_sampled]
 
             valids = ~torch.isnan(traj2d_t).any(dim=-1).any(dim=0)
-            valids = valids & track_valid_t[:, inds_sampled].all(dim=0)
+            valids = valids & track_valid_t[:, inds_sampled]
 
             # Create query points
             gt_vis_any_view = visibility_t.any(dim=0)

@@ -154,6 +154,13 @@ def forward_batch_multi_view(batch, model, cfg, step, train_iters, gamma, save_d
             gt_trajectories_3d_worldspace_sorted[:, ind: ind + cfg.model.sliding_window_len, :wind_p_idx_end])
         valids_gts.append(valid_tracks_per_frame_sorted[:, ind: ind + cfg.model.sliding_window_len, :wind_p_idx_end])
 
+    # Warn if any window has no valid tracks (causes zero loss / zero gradients)
+    for j, v_gt in enumerate(valids_gts):
+        if not v_gt.any():
+            logging.warning(f"[step={step}] Window {j}/{len(valids_gts)} has NO valid tracks — "
+                            f"loss will be zero for this window. "
+                            f"seq={batch.seq_name}, num_points={num_points}")
+
     # Compute the losses
     logging.info(f"[DEBUG] "
                  f"{step=} "
@@ -553,9 +560,11 @@ def main(cfg: DictConfig):
             data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
             views_to_return=[1, 7, 14, 20],  # 4-view setup
             traj_per_sample=cfg.datasets.train.traj_per_sample,
-            seed=72,
+            seed=None,  # random seed per epoch for frame subsampling
             max_videos=4,  # basketball, boxes, football, juggle
             use_cached_tracks=False,
+            crop_size=cfg.augmentations.get("cropping_size", [384, 512]),
+            seq_len=cfg.datasets.train.get("sequence_len", 24),
         )
         logging.info(f"Panoptic human training dataset: {len(train_dataset)} samples")
     elif cfg.datasets.train.name == "mixed-kubric-panoptic-human":
