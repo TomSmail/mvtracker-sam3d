@@ -62,7 +62,7 @@ def load_intrinsics(seq_path):
     ann_file = os.path.join(seq_path, "tapvid3d_annotations.npz")
     if not os.path.exists(ann_file):
         return None
-    ann = np.load(ann_file)
+    ann = np.load(ann_file, allow_pickle=True)
     return ann["intrinsics"]  # [n_views, 3, 3]
 
 
