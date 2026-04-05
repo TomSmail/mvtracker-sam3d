@@ -141,6 +141,35 @@ Dataset name modifiers: `-views`, `-duster`, `-cached`, `-novelviews`, `-removeh
 
 ---
 
+## Development Workflow (Local + Euler)
+
+Code is edited **locally** (this machine) and executed **remotely** on Euler (ETH HPC cluster). The standard workflow is:
+
+1. Edit code locally in this repo
+2. `git push` to remote
+3. SSH into Euler and `git pull` to sync
+4. Submit or run jobs on Euler via SLURM or interactive sessions
+
+Claude Code runs locally and uses `ssh euler "..."` to run commands on Euler directly within the conversation. This means you can:
+- Check job status: `ssh euler "squeue -u tsmail"`
+- Check logs: `ssh euler "tail -n 50 /cluster/home/tsmail/mvtracker-sam3d/logs/slurm_logs/<job>.out"`
+- Pull latest code: `ssh euler "cd /cluster/home/tsmail/mvtracker-sam3d && git pull"`
+- Submit jobs: `ssh euler "cd /cluster/home/tsmail/mvtracker-sam3d && sbatch scripts/slurm/<script>.sh"`
+
+**Euler paths:**
+- Code: `/cluster/home/tsmail/mvtracker-sam3d/`
+- Datasets: `/cluster/scratch/tsmail/datasets/`
+- Checkpoints: `/cluster/home/tsmail/checkpoints/`
+- SLURM logs: `/cluster/home/tsmail/mvtracker-sam3d/logs/slurm_logs/`
+
+**Euler environment** (always load modules + activate venv before running Python):
+```bash
+module load stack/2024-06 gcc/12.2.0 python_cuda/3.11.6
+source /cluster/home/tsmail/mvtracker-sam3d/venv/bin/activate
+```
+
+---
+
 ## Environment
 
 Python 3.10.12 · PyTorch 2.3.0 · CUDA 12.1 · gcc 11.3.0
