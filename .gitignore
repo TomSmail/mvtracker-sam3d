@@ -153,6 +153,22 @@ debug/
 .sl/
 *.lock
 
+# LaTeX source and images (force-include despite global image ignore rules)
+!thesis/images/
+!thesis/images/*
+
+# LaTeX build artifacts (thesis/)
+thesis/*.aux
+thesis/*.bbl
+thesis/*.blg
+thesis/*.fdb_latexmk
+thesis/*.fls
+thesis/*.log
+thesis/*.out
+thesis/*.synctex.gz
+thesis/*.toc
+thesis/*.pdf
+
 # Project-specific: Testing
 **/.dist_test
 sandbox*

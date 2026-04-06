@@ -150,6 +150,28 @@ Code is edited **locally** (this machine) and executed **remotely** on Euler (ET
 3. SSH into Euler and `git pull` to sync
 4. Submit or run jobs on Euler via SLURM or interactive sessions
 
+### Thesis Writing
+
+The thesis LaTeX source lives in `thesis/` in this repo. **Code changes and thesis writing are done together** — when implementing or evaluating a feature, update the relevant thesis section in the same commit or shortly after. Key files:
+- `thesis/main.tex` — main document
+- `thesis/cite.bib` — bibliography
+
+When implementing something notable (new feature, experiment, evaluation result), update the thesis methodology or results section to reflect it.
+
+### Recording Experimental Results
+
+When a training run or evaluation completes, record the key numbers directly in the thesis or in a structured comment near the relevant code/config. Include:
+- Job ID and date for traceability
+- Dataset, model config, number of steps
+- Key metrics (xyz_loss, vis_loss, eval AJ/APD if available)
+
+Example pattern after a finetune job completes:
+```
+# Job 62446065 | 2026-04-06 | finetune-pc-aug 5000 steps from mvtracker_200000_june2025.pth
+# panoptic-human-training | sequence_len=24, traj_per_sample=384, bf16
+# xyz_loss=X.XXX, vis_loss=X.XXX
+```
+
 Claude Code runs locally and uses `ssh euler "..."` to run commands on Euler directly within the conversation. This means you can:
 - Check job status: `ssh euler "squeue -u tsmail"`
 - Check logs: `ssh euler "tail -n 50 /cluster/home/tsmail/mvtracker-sam3d/logs/slurm_logs/<job>.out"`

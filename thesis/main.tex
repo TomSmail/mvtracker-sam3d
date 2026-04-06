@@ -1,0 +1,248 @@
+\documentclass[12pt, a4paper, oneside]{report}
+
+% - Packages for technical writing -
+\usepackage[utf8]{inputenc}
+\usepackage[british]{babel}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\begin{document}
+\hypersetup{pageanchor=false}
+
+% --- Front Matter ---
+\begin{titlepage}
+    \centering
+    \huge \textbf{SAM3D-Enhanced MV-Tracker} \\
+    \large \textit{Integrating Human Kinematic and Semantic Priors for Multi-View 3D Point Tracking} \\
+    \vfill
+    \textbf{Author:} Thomas Smail\\
+    \textbf{Supervisors:} Prof Marc Pollefeys, ETH \& Dr Sughwan Hong, ETH \\
+    \vfill
+    A thesis submitted for the Joint Master's Degree \\
+    \vfill
+    \includegraphics[width=0.4\textwidth]{images/eth-crest.png} \hfill \includegraphics[width=0.4\textwidth]{images/ic-logo.png}
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\clearpage
+\hypersetup{pageanchor=true}
+\pagenumbering{arabic}
+
+% --- Chapter 1: Introduction ---
+\chapter{Introduction}
+\label{ch:intro}
+Human-centric 3D point tracking is a particularly challenging variant of general point tracking due to severe self-occlusion, articulated non-rigid motion, and persistent appearance ambiguity across body parts. While the MVTracker framework already leverages multi-view and temporal context, its correlation evidence is derived entirely from depth-based point clouds, which are often incomplete or noisy over human bodies due to reflective clothing, thin limbs, and sensor limitations.
+
+This thesis investigates whether directly enriching the 3D point cloud with human mesh geometry can improve track consistency and robustness under these conditions. We integrate SAM-3D-Body outputs into MVTracker by augmenting the depth-based point cloud with SMPL mesh vertices, providing explicit geometric coverage of the human body surface where depth maps are unreliable. We also build a dedicated human data engine that provides dense trajectory supervision from Panoptic Studio sequences.
+
+The key contributions are threefold. First, we implement and evaluate a kNN semantic bias approach that re-ranks neighbour candidates by body-part proximity; this approach did not produce measurable improvement, and its failure motivates a more direct intervention. Second, we introduce a point cloud augmentation strategy that inserts SAM3D mesh vertices directly into the depth-based point cloud (with CNN features sampled via multi-view projection), requiring zero new learnable parameters. Third, we design and validate a human-centric trajectory generation pipeline that converts multi-view SAM3D fits into MVTracker-compatible supervision with explicit visibility modelling.
+
+% --- Chapter 2: Background & Related Work ---
+\chapter{Background}
+\label{ch:background}
+\section{Multi-View Track Any Point (MV-TAP)}
+The objective of point tracking is to estimate a query point's trajectory and visibility through time. MV-TAP \cite{koo2025mvtaptrackingpointmultiview} demonstrates that combining multi-view context with temporal modelling improves tracking robustness beyond methods that treat these axes separately.
+
+\section{MVTracker Architecture}
+MVTracker back-projects RGBD observations into 3D point clouds and retrieves local correlation evidence through kNN-based lookup. A temporal-spatial transformer then iteratively refines track coordinates and visibility predictions. In the baseline design, neighbour retrieval is purely Euclidean in 3D space, which is effective for generic scenes but does not explicitly encode human-part semantics.
+
+\section{Dense 3D Reconstruction via Point Map Regression}
+DuSt3R \cite{wang2024dust3rgeometric3dvision} represents a paradigm shift in 3D reconstruction by casting the problem as a direct regression of dense point maps from image pairs, bypassing the traditional pipeline of feature matching, essential matrix estimation, and triangulation. Built on standard Transformer encoders and decoders, DuSt3R shares information between views through cross-attention and leverages pre-trained vision weights to learn strong geometric and shape priors.
+
+A key property of DuSt3R is its agnosticism to camera parameters: the method requires no prior knowledge of camera intrinsics or extrinsic poses and can even perform monocular reconstruction from a single input image. For multi-image collections, a fast global alignment procedure expresses all pairwise point maps in a common reference frame, effectively stitching the scene together in 3D space.
+
+However, DuSt3R assumes static scenes, relying on overlapping visual content across views to establish correspondences. It does not explicitly model moving or articulated objects such as humans, which limits its direct applicability to dynamic human-centric scenarios.
+
+\section{Grounding Image Matching in 3D with MASt3R}
+MASt3R \cite{mast3r_arxiv24} builds upon DuSt3R by adding a dedicated head that regresses dense local feature maps alongside the 3D point maps. While 3D regression is inherently noisy, these learned features enable highly accurate, pixel-level correspondences that go beyond what point map regression alone can provide.
+
+To handle high-resolution images, MASt3R adopts a coarse-to-fine strategy: it first matches downscaled image versions to establish coarse correspondences, then uses a greedy window-sampling approach to zoom in on overlapping areas at full resolution for fine-grained matching. This is complemented by Fast Reciprocal Matching (FRM), a sub-sampling algorithm that iterates through mutual nearest neighbours rather than exhaustively comparing every pixel. FRM reduces the quadratic $O(W^2 H^2)$ complexity by nearly two orders of magnitude and actually improves pose accuracy by filtering out outliers.
+
+A central design choice is the 3D-aware loss function: MASt3R combines the standard 3D regression loss with a matching loss (InfoNCE) that grounds feature learning in 3D geometry, ensuring that the network is specifically rewarded for identifying exact pixel correspondences. This grounding in 3D makes the learned features geometrically consistent rather than purely appearance-based.
+
+For human-centric tracking, this selective matching capability is particularly relevant. In multi-view human scenes, the background dominates the image while the subject of interest occupies a relatively small region. MASt3R's coarse-to-fine and reciprocal matching mechanisms provide a natural way to focus correspondence estimation on the regions that matter---the tracked human---rather than wasting capacity on background detail. The approach in this thesis pursues a complementary strategy (Chapter~\ref{ch:method}): rather than filtering correspondences, we enrich the point cloud itself with dense human body surface geometry so that the downstream kNN correlation naturally attends to body-relevant regions.
+
+\section{Continuous 3D Reconstruction for Video with CuT3R}
+CuT3R \cite{wang2025continuous3dperceptionmodel} extends the DuSt3R/MASt3R line of work from static image pairs to live video streams, introducing a framework for continuous tracking and 3D reconstruction. Rather than processing frames in isolation or as an unordered set, CuT3R maintains a persistent 3D memory state --- represented as a set of latent tokens --- that is updated incrementally as new frames arrive. This allows the model to retain geometric knowledge of scene regions that have left the current field of view.
+
+The system operates through two complementary functions. An \textit{Update} function integrates new visual information into the memory tokens, while a \textit{Query} (Get) function extracts the current 3D point map and camera pose from the stored state. Each incoming frame is encoded with a Vision Transformer (ViT); the memory update is not a simple vector addition but uses Transformer decoders with cross-attention, allowing the memory state to attend to the new image tokens and fuse temporal history with current observations.
+
+For the human tracking setting, CuT3R's persistent state mechanism is conceptually relevant: occlusion and re-entry are precisely the scenarios where a model that remembers prior geometry has an advantage over one that reconstructs from the current frame alone. However, CuT3R targets general scene reconstruction and does not explicitly model articulated motion, which remains the domain of body-specific representations such as SMPL.
+
+\section{SAM3D and MHR Priors}
+\label{sec:sam3d}
+SAM-3D-Body provides per-frame human mesh fits and keypoints, including 70 MHR joints per detected person. These joints define a compact semantic scaffold over the body that can be used to measure whether two candidate points are likely to correspond to similar anatomical regions, even under viewpoint changes or temporary occlusions.
+
+% --- Chapter 3: Methodology ---
+\chapter{SAM3D-Enhanced MV-Tracker}
+\label{ch:method}
+\section{Overview}
+The central challenge in applying MVTracker to human-centric scenes is that the depth-based point cloud --- the sole source of correlation evidence --- is frequently incomplete over human bodies. Reflective or textured clothing, thin limbs, and self-occlusion all produce holes and noise in the depth map, leaving the kNN correlation search without valid candidates near the tracked body surface.
+
+We investigate two strategies for injecting SAM-3D-Body priors into MVTracker. The first, kNN semantic bias, attempts to improve neighbour selection within the existing point cloud by re-ranking candidates based on body-part proximity. The second, point cloud augmentation, directly addresses the data gap by adding SMPL mesh vertices as additional points in the point cloud. Both strategies preserve full backward compatibility with the baseline MVTracker architecture.
+
+\section{Approach 1: kNN Semantic Bias}
+\label{sec:knn_bias}
+
+\subsection{Mechanism}
+Rather than changing the point cloud, the kNN bias approach re-ranks the neighbour candidates used for correlation. For each query point, instead of fetching $k=16$ nearest neighbours in Euclidean space, we over-fetch $k' = 4k = 64$ candidates and then re-rank them using a combined spatial-semantic distance.
+
+For each candidate, a soft body-part assignment is computed based on its distance to the 70 MHR joints provided by SAM3D:
+\begin{equation}
+    \mathbf{w} = \operatorname{softmax}\left( -\frac{\mathbf{d}_{\text{joint}}}{\tau} \right),
+\end{equation}
+where $\tau$ is a learnable temperature parameter (initialised to 0.15). The semantic distance between a query point $q$ and a candidate $c$ is then
+\begin{equation}
+    d_{\text{sem}} = \lVert \mathbf{w}_{q} - \mathbf{w}_{c} \rVert_2,
+\end{equation}
+and the combined ranking criterion is
+\begin{equation}
+    d_{\text{adj}} = d_{\text{spatial}} + |\lambda|\, d_{\text{sem}},
+\end{equation}
+where $\lambda$ is a learnable strength parameter (initialised to 0.1). Top-$k$ selection is performed on $d_{\text{adj}}$. To provide a differentiable gradient path to $\lambda$ and $\tau$, a soft weighting
+\begin{equation}
+    \omega = \exp\!\left(-\frac{|\lambda|\, d_{\text{sem}}}{\tau + 10^{-6}}\right)
+\end{equation}
+is applied element-wise to the selected correlation features.
+
+\subsection{Limitations}
+Empirically, the kNN bias approach produced no measurable improvement in tracking quality. The fundamental issue is that re-ranking operates only on the candidates that already exist in the depth-based point cloud. Where the depth map has holes over occluded or reflective body regions, there are simply no good candidates to select regardless of the ranking criterion. Re-ranking 64 bad neighbours cannot substitute for having good neighbours in the first place.
+
+Additionally, with only two learnable scalar parameters ($\lambda$ and $\tau$), the model has insufficient capacity to adapt meaningfully. The gradient signal through the kNN gather operation is weak, and a short finetuning run (5,000 steps on four Panoptic scenes) confirmed that $\lambda$ and $\tau$ did not converge to values that produced consistent improvements.
+
+These results motivate a more direct intervention: rather than adjusting which existing points are selected, we add the missing body-surface points to the cloud.
+
+\section{Approach 2: Point Cloud Augmentation}
+\label{sec:pc_aug}
+
+\subsection{Mechanism}
+The point cloud augmentation approach concatenates SAM3D SMPL mesh vertices directly into the depth-based point cloud before the kNN correlation search. This means that even where the depth sensor provides no coverage, the tracker can find body-surface points as nearest neighbours and compute meaningful correlations from them.
+
+SAM-3D-Body produces approximately 6,890 SMPL mesh vertices per detected person per frame in world coordinates. These are appended to the existing depth-based point cloud ($\sim$57k points) at each pyramid level, representing a $\sim$12\% increase in cloud size with modest computational overhead.
+
+\subsection{Feature Extraction for Mesh Vertices}
+Depth-based points carry 128-dimensional CNN feature vectors obtained by lifting 2D image features into 3D. Mesh vertices have no direct depth pixel to sample from, so their features are computed by multi-view projection:
+\begin{enumerate}
+    \item Each mesh vertex $\mathbf{v}$ is projected into every camera view using the known extrinsics and intrinsics.
+    \item The CNN feature map is bilinearly sampled at the projected pixel location for each view where the vertex projects within image bounds.
+    \item Features are averaged across all valid views to produce the final 128-d feature vector for that vertex.
+\end{enumerate}
+This gives each mesh vertex a geometrically grounded appearance descriptor consistent with those of the surrounding depth points, requiring no new learnable parameters.
+
+\subsection{Backward Compatibility}
+The forward pass accepts an optional tensor \texttt{sam3d\_vertices\_world} of shape $(B, T, n_{\text{persons}}, V, 3)$, where $V \approx 6890$. When this tensor is absent, the augmentation step is skipped and the model behaves identically to the baseline MVTracker. The kNN bias code (Section~\ref{sec:knn_bias}) remains in the codebase and can be combined with augmentation, but the primary experiments evaluate augmentation alone.
+
+% --- Chapter 4: Data Generation & Training ---
+\chapter{The Synthetic-to-Real Data Engine}
+\label{ch:data}
+\section{Pipeline Overview}
+We implemented a multi-stage offline data engine to produce MVTracker-compatible human trajectory supervision from Panoptic Studio data.
+
+\textbf{Stage 1: Per-view SAM3D inference.} SAM-3D-Body is run independently on each camera stream to produce per-frame 3D keypoints (70 MHR joints), mesh vertices, pose and shape parameters, and camera-frame translations.
+
+\textbf{Stage 2: Cross-view fusion and trajectory generation.} Camera-space predictions are transformed to world coordinates using Panoptic extrinsics. Persons are associated across views by pelvis proximity via the Hungarian algorithm, then joints and vertices are averaged across associated views. A temporal uniform filter smooths trajectories. The pipeline samples both joints and mesh vertices as track points and computes per-view visibility using projection validity, image-bounds checks, and depth-based occlusion tests.
+
+\textbf{Stage 3: Export.} The output is stored as \texttt{human\_tracks.npz} files with fields aligned to MVTracker datapoints: \texttt{trajectory\_3d}, \texttt{visibility}, \texttt{query\_points\_3d}, and \texttt{valid}, plus metadata such as number of persons, keypoints, and track types.
+
+\section{Dataset Integration}
+A dedicated \texttt{PanopticHumanTrajectoryDataset} loader ingests generated tracks and returns both the standard trajectory tensors and \texttt{sam3d\_vertices\_world} --- the per-frame SMPL mesh vertex positions in world space --- which are used by the point cloud augmentation module at training and inference time.
+
+The same scene normalisation used by the baseline Panoptic loader is applied to both trajectories and SAM3D outputs (scale 2.5 and $-90^{\circ}$ rotation around the X-axis), ensuring consistent coordinate frames. Camera-space outputs from SAM3D are transformed to Panoptic world coordinates through
+\begin{equation}
+    \mathbf{p}_{\text{world}} = \mathbf{R}^{-1} (\mathbf{p}_{\text{cam}} - \mathbf{t}).
+\end{equation}
+
+\section{Training Strategy}
+Since the point cloud augmentation approach introduces no new learnable parameters, the full MVTracker backbone is available for optimisation. Training starts from a pre-trained MVTracker checkpoint (trained for 200k steps on Kubric synthetic data) and continues with the augmented point cloud on Panoptic human sequences.
+
+Loss definitions remain unchanged from baseline MVTracker: a trajectory regression loss and a balanced visibility BCE loss. Optimisation uses AdamW with OneCycleLR. The augmentation is active throughout training, so the model learns correlation features over a point cloud that includes both depth points and SAM3D mesh vertices from the first training step.
+
+% --- Chapter 5: Experiments & Results ---
+\chapter{Evaluation}
+\label{ch:eval}
+\section{Evaluation Protocol}
+\subsection{Metrics}
+We evaluate with the standard 3D point-tracking metrics used by MVTracker: 3D Average Jaccard (AJ), Average Trajectory Error (ATE), Median Trajectory Error (MTE), Final Displacement Error (FDE), thresholded point accuracy ($\delta$ at 0.05, 0.10, 0.20, 0.40), occlusion accuracy, and survival rate.
+
+\subsection{Configurations}
+We use three configurations for controlled comparison: (i) baseline MVTracker with depth-only point cloud, (ii) MVTracker with kNN semantic bias (zero-shot, no finetuning), and (iii) MVTracker with point cloud augmentation (with and without finetuning on Panoptic human data).
+
+All configurations are evaluated on the same three Panoptic view setups:
+\begin{itemize}
+    \item \texttt{panoptic-human-views1\_7\_14\_20}
+    \item \texttt{panoptic-human-views27\_16\_14\_8}
+    \item \texttt{panoptic-human-views1\_4\_7\_11}
+\end{itemize}
+A dedicated comparison script computes per-dataset deltas between baseline and augmented runs.
+
+\subsection{Training Hyperparameters}
+The finetuning setup for the point cloud augmentation model uses the following values:
+\begin{itemize}
+    \item Base checkpoint: mvtracker\_200000\_june2025.pth (pre-trained for 200k steps on Kubric synthetic data).
+    \item Trainable parameters: all ($\sim$22.6M), with full backbone unfrozen.
+    \item Learning rate: 0.0005.
+    \item Training steps: 5,000 (approximately 13 epochs over 4 Panoptic training scenes).
+    \item Batch size: 1 sequence per optimisation step.
+    \item Sequence length: 24 frames.
+    \item Tracks per sample: 384.
+    \item Precision: bf16-mixed.
+    \item Point cloud augmentation: SAM3D SMPL vertices ($\sim$6,890 per person) concatenated at each pyramid level.
+    \item Evaluation frequency: every 500 steps.
+\end{itemize}
+
+\section{Model Training Evaluation}
+Model-centric analysis is structured in two stages. First, we compare the kNN semantic bias (zero-shot) against the baseline to characterise its failure mode and confirm that re-ranking without additional geometry provides no measurable benefit. Second, we evaluate the point cloud augmentation approach: comparing the zero-shot augmented model against the baseline, and then comparing pre- and post-finetuning performance to assess how much further benefit is gained from adapting the backbone to the augmented data. Per-metric deltas are reported for each Panoptic view configuration.
+
+\section{Data Pipeline Evaluation (Modified AnthroTAP)}
+To quantify the reliability of the modified AnthroTAP generation pipeline, we performed a cross-sequence quality audit over six sequences (basketball, boxes, football, juggle, softball, and tennis), comprising approximately 431M generated data points. The audit covered data completeness, temporal smoothness, multi-view coverage, visibility behaviour, and coordinate normalisation.
+
+\subsection{Cross-Sequence Quality Summary}
+\begin{table}[htbp]
+    \centering
+    \begin{tabularx}{\textwidth}{lccc>{\raggedright\arraybackslash}X}
+        \toprule
+        Sequence & Persons & Visibility & Valid tracks & Notes \\
+        \midrule
+        basketball & 2 & 100.0\% & 96.3\% & Minor occlusions in the middle portion of the sequence. \\
+        boxes      & 1 & 100.0\% & 100.0\% & Perfect tracking quality. \\
+        football   & 2 & 100.0\% & 100.0\% & Perfect tracking quality. \\
+        juggle     & 1 & 100.0\% & 100.0\% & Perfect tracking quality. \\
+        softball   & 2 & 81.0\%  & 82.0\%  & Person 1 appears only from frame 54 onward. \\
+        tennis     & 2 & 97.5\%  & 100.0\% & Near-perfect quality. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Cross-sequence quality statistics for the modified AnthroTAP pipeline.}
+    \label{tab:anthrotap_quality_summary}
+\end{table}
+
+\subsection{Detailed Findings}
+\textbf{Data completeness.} All six sequences were generated successfully. Required fields are present for each sample: 3D trajectories, 2D pixel projections, visibility masks, and camera parameters. No NaN values were detected. For two-person scenes, each frame contains 1,140 tracks (140 keypoints and 1,000 mesh vertices).
+
+\textbf{Temporal smoothness.} Root-joint velocity ranges from 0.01 to 0.02 units per frame. After a 3-frame smoothing kernel, mean acceleration is 0.022 and maximum acceleration is 0.63, indicating mostly smooth motion with occasional rapid actions.
+
+\textbf{Multi-view coverage and occlusion robustness.} Each track is visible in 18--21 cameras on average (out of 31), with at least two visible views even for heavily occluded points.
+
+\textbf{Known issue.} In softball, person 1 is absent in frames 0--53 and enters at frame 54. This is consistent with SAM3D visibility-driven detection and can be handled during training via visibility masking.
+
+\textbf{Coordinate normalisation.} World coordinates remain within expected normalised ranges (X in [-1.2, 1.7], Y in [-1.9, 0.2], Z in [-2.0, 1.6]), matching Panoptic normalisation and MVTracker input assumptions.
+
+\section{Qualitative Results}
+Qualitative inspection focuses on articulation-heavy motion and prolonged self-occlusion, particularly in regions where the depth sensor provides sparse coverage (e.g., arms crossing, leg occlusions). Representative examples contrast baseline drift against the augmented model's behaviour, highlighting cases where mesh vertices provide the only available correlation evidence in occluded regions.
+
+% --- Chapter 6: Conclusion ---
+\chapter{Conclusion}
+This work integrates SAM-3D-Body human mesh priors into MVTracker via point cloud augmentation and a dedicated human data engine. Rather than modifying the correlation algorithm, augmentation directly addresses the root cause of tracking failures on human bodies: missing geometry in the depth-based point cloud. By concatenating SMPL mesh vertices with CNN features sampled via multi-view projection, the approach introduces dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead.
+
+An earlier attempt to improve tracking through kNN semantic bias --- re-ranking neighbour candidates by body-part proximity --- was evaluated and found to be ineffective. The analysis shows that low-capacity interventions on an incomplete point cloud cannot compensate for the absence of body-surface data, and motivates the shift to direct geometric augmentation.
+
+Limitations include dependence on SAM3D detection availability and occasional sequence-specific coverage gaps (for example, a subject entering the scene mid-sequence). Future work includes investigating vertex subsampling strategies to reduce cloud size, extending the augmentation to non-human articulated objects, and evaluating on broader real-world capture domains beyond Panoptic Studio.
+
+\bibliographystyle{plain}
+\bibliography{cite}
+
+\end{document}
