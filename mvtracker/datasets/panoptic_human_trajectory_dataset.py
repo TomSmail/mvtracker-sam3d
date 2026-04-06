@@ -153,7 +153,14 @@ class PanopticHumanTrajectoryDataset(Dataset):
 
     def __getitem__(self, index):
         start_time = time.time()
-        sample = self._getitem_helper(index)
+        for attempt in range(len(self.seq_names)):
+            try:
+                sample = self._getitem_helper((index + attempt) % len(self.seq_names))
+                break
+            except Exception as e:
+                if attempt == 0:
+                    import warnings
+                    warnings.warn(f"Skipping seq index {index} ({self.seq_names[index]}): {e}")
         self.getitem_calls += 1
         if self.getitem_calls < 10:
             print(f"Loading {index:>06d} took {time.time() - start_time:.3f} sec. "
@@ -194,7 +201,12 @@ class PanopticHumanTrajectoryDataset(Dataset):
         for v in views_to_load:
             rgb_folder = os.path.join(ims_path, str(v))
             rgb_files = sorted(os.listdir(rgb_folder))
-            rgb_images = [cv2.imread(os.path.join(rgb_folder, f))[:, :, ::-1] for f in rgb_files]
+            rgb_images = []
+            for f in rgb_files:
+                img = cv2.imread(os.path.join(rgb_folder, f))
+                if img is None:
+                    raise RuntimeError(f"Failed to read image: {os.path.join(rgb_folder, f)}")
+                rgb_images.append(img[:, :, ::-1])
             depth_file = os.path.join(depths_path, f"depths_{v:02d}.npy")
             depth = np.load(depth_file) if os.path.exists(depth_file) else None
             views[v] = {"rgb": np.stack(rgb_images), "depth": depth}
