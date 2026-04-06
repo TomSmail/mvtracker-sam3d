@@ -126,12 +126,36 @@ class PanopticHumanTrajectoryDataset(Dataset):
         seq_names = sorted(seq_names)
         valid_seqs = []
 
+        views_to_check = self.views_to_return
+        if self.novel_views is not None and views_to_check is not None:
+            views_to_check = list(set(views_to_check + self.novel_views))
+
         for seq_name in seq_names:
             scene_path = os.path.join(self.data_root, seq_name)
             tracks_file = os.path.join(scene_path, "human_tracks.npz")
             if not os.path.exists(tracks_file):
                 warnings.warn(f"Skipping {scene_path}: no human_tracks.npz")
                 continue
+            # Skip sequences where any required view has corrupt/empty images
+            if views_to_check is not None:
+                ims_path = os.path.join(scene_path, "ims")
+                bad_view = False
+                for v in views_to_check:
+                    view_dir = os.path.join(ims_path, str(v))
+                    if not os.path.isdir(view_dir):
+                        bad_view = True
+                        break
+                    imgs = sorted(os.listdir(view_dir))
+                    if not imgs:
+                        bad_view = True
+                        break
+                    first_img = os.path.join(view_dir, imgs[0])
+                    if os.path.getsize(first_img) == 0:
+                        bad_view = True
+                        break
+                if bad_view:
+                    warnings.warn(f"Skipping {seq_name}: corrupt/missing images for required views")
+                    continue
             valid_seqs.append(seq_name)
 
         if max_videos is not None:
