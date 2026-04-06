@@ -152,20 +152,22 @@ class PanopticHumanTrajectoryDataset(Dataset):
         return len(self.seq_names)
 
     def __getitem__(self, index):
+        import warnings
         start_time = time.time()
+        last_exc = None
         for attempt in range(len(self.seq_names)):
             try:
                 sample = self._getitem_helper((index + attempt) % len(self.seq_names))
-                break
+                self.getitem_calls += 1
+                if self.getitem_calls < 10:
+                    print(f"Loading {index:>06d} took {time.time() - start_time:.3f} sec. "
+                          f"Getitem calls: {self.getitem_calls}")
+                return sample, True
             except Exception as e:
-                if attempt == 0:
-                    import warnings
-                    warnings.warn(f"Skipping seq index {index} ({self.seq_names[index]}): {e}")
-        self.getitem_calls += 1
-        if self.getitem_calls < 10:
-            print(f"Loading {index:>06d} took {time.time() - start_time:.3f} sec. "
-                  f"Getitem calls: {self.getitem_calls}")
-        return sample, True
+                last_exc = e
+                warnings.warn(f"Skipping seq index {(index + attempt) % len(self.seq_names)} "
+                               f"({self.seq_names[(index + attempt) % len(self.seq_names)]}): {e}")
+        raise RuntimeError(f"No valid sequence found after {len(self.seq_names)} attempts") from last_exc
 
     def _getitem_helper(self, index):
         if self.seed is None:
