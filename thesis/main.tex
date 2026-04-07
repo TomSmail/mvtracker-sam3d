@@ -27,6 +27,19 @@
     \includegraphics[width=0.4\textwidth]{images/eth-crest.png} \hfill \includegraphics[width=0.4\textwidth]{images/ic-logo.png}
 \end{titlepage}
 
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+Tracking arbitrary 3D points through time is a core capability for scene understanding, robotic manipulation, and motion analysis. Multi-view RGBD systems such as MVTracker \cite{rajič2025multiview3dpointtracking} achieve strong results on generic scenes, but struggle on human-centric sequences: self-occlusion, articulated non-rigid motion, and depth sensor noise over clothed surfaces leave the depth-based point cloud --- MVTracker's sole source of correlation evidence --- sparse or empty over body regions.
+
+This thesis investigates two strategies for injecting SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} human mesh priors into MVTracker. The first, kNN semantic bias, re-ranks neighbour candidates using body-part proximity scores derived from MHR-70 joints. This approach produced no measurable improvement, revealing that re-ranking a sparse or absent neighbour set cannot compensate for missing geometry. The second, point cloud augmentation, directly inserts SMPL \cite{loper2015smpl} mesh vertices into the depth-based point cloud with CNN features sampled via multi-view projection. This adds dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead (approximately 12\% increase in cloud size).
+
+To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. A cross-sequence quality audit over six sequences confirms reliable track completeness and coordinate consistency.
+
+We evaluate on three Panoptic Studio multi-view configurations and report 3D tracking accuracy and occlusion robustness, comparing the baseline depth-only model against the point cloud augmented variant before and after finetuning on human sequences.
+
+\clearpage
+
 \pagenumbering{roman}
 \tableofcontents
 \clearpage
@@ -36,22 +49,29 @@
 % --- Chapter 1: Introduction ---
 \chapter{Introduction}
 \label{ch:intro}
-Human-centric 3D point tracking is a particularly challenging variant of general point tracking due to severe self-occlusion, articulated non-rigid motion, and persistent appearance ambiguity across body parts. While the MVTracker framework already leverages multi-view and temporal context, its correlation evidence is derived entirely from depth-based point clouds, which are often incomplete or noisy over human bodies due to reflective clothing, thin limbs, and sensor limitations.
+Human-centric 3D point tracking is a particularly challenging variant of general point tracking due to severe self-occlusion, articulated non-rigid motion, and persistent appearance ambiguity across body parts. While the MVTracker framework \cite{rajič2025multiview3dpointtracking} already leverages multi-view and temporal context, its correlation evidence is derived entirely from depth-based point clouds, which are often incomplete or noisy over human bodies due to reflective clothing, thin limbs, and sensor limitations.
 
-This thesis investigates whether directly enriching the 3D point cloud with human mesh geometry can improve track consistency and robustness under these conditions. We integrate SAM-3D-Body outputs into MVTracker by augmenting the depth-based point cloud with SMPL mesh vertices, providing explicit geometric coverage of the human body surface where depth maps are unreliable. We also build a dedicated human data engine that provides dense trajectory supervision from Panoptic Studio sequences.
+This thesis investigates whether directly enriching the 3D point cloud with human mesh geometry can improve track consistency and robustness under these conditions. We integrate SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} outputs into MVTracker by augmenting the depth-based point cloud with SMPL mesh vertices, providing explicit geometric coverage of the human body surface where depth maps are unreliable. We also build a dedicated human data engine that provides dense trajectory supervision from Panoptic Studio sequences.
 
 The key contributions are threefold. First, we implement and evaluate a kNN semantic bias approach that re-ranks neighbour candidates by body-part proximity; this approach did not produce measurable improvement, and its failure motivates a more direct intervention. Second, we introduce a point cloud augmentation strategy that inserts SAM3D mesh vertices directly into the depth-based point cloud (with CNN features sampled via multi-view projection), requiring zero new learnable parameters. Third, we design and validate a human-centric trajectory generation pipeline that converts multi-view SAM3D fits into MVTracker-compatible supervision with explicit visibility modelling.
 
 % --- Chapter 2: Background & Related Work ---
 \chapter{Background}
 \label{ch:background}
-\section{Multi-View Track Any Point (MV-TAP)}
-The objective of point tracking is to estimate a query point's trajectory and visibility through time. MV-TAP \cite{koo2025mvtaptrackingpointmultiview} demonstrates that combining multi-view context with temporal modelling improves tracking robustness beyond methods that treat these axes separately.
+\section{Multi-View Point Tracking}
+The objective of point tracking is to estimate a query point's trajectory and visibility through time. The MV-TAP benchmark \cite{koo2025mvtaptrackingpointmultiview} establishes evaluation protocols for this task in multi-view settings, demonstrating that combining multi-view context with temporal modelling yields substantial improvements over single-view methods. CoTracker \cite{karaev2023cotracker} established the pattern of joint temporal-spatial attention over track features that underlies modern point trackers, showing that tracking points together in a shared attention context is more robust than tracking each independently.
 
 \section{MVTracker Architecture}
-MVTracker back-projects RGBD observations into 3D point clouds and retrieves local correlation evidence through kNN-based lookup. A temporal-spatial transformer then iteratively refines track coordinates and visibility predictions. In the baseline design, neighbour retrieval is purely Euclidean in 3D space, which is effective for generic scenes but does not explicitly encode human-part semantics.
+\label{sec:mvtracker_arch}
+MVTracker \cite{rajič2025multiview3dpointtracking} extends the CoTracker paradigm to multi-view RGBD video. At each sliding window of $S$ frames, the forward pass proceeds as follows. A \texttt{BasicEncoder} extracts per-frame CNN features of shape $(B \cdot V \cdot S,\, 128,\, H/4,\, W/4)$ from all camera views. These features are then lifted into 3D: the function \texttt{init\_pointcloud\_from\_rgbd} back-projects every depth pixel from all views into world space, producing a merged point cloud of approximately $V \cdot H \cdot W \approx 57\text{k}$ points per frame, each carrying a 128-dimensional feature vector. This depth-based point cloud is constructed at four spatial pyramid levels.
+
+For each tracked point, a \texttt{PointcloudCorrBlock} queries the point cloud via kNN search ($k=16$ neighbours in Euclidean 3D space) and computes a three-plane correlation volume, yielding a compact per-track feature tensor. These correlation features, together with accumulated track features and visibility states, are processed by \texttt{EfficientUpdateFormer}: a transformer with six temporal and six spatial attention layers and 64 learnable virtual tracks that act as a bottleneck for cross-track communication. The transformer outputs coordinate deltas and feature updates, which are accumulated over four iterative refinement steps per window.
+
+The point cloud is the architectural linchpin: all correlation evidence flows through it, and any gap in the depth map --- caused by reflective clothing, thin limbs, or sensor occlusion --- directly degrades the quality of the kNN lookup for tracks in that region. This motivates the interventions described in Chapter~\ref{ch:method}.
 
 \section{Dense 3D Reconstruction via Point Map Regression}
+The depth maps that feed MVTracker's point cloud can be generated by a variety of methods; the following three sections cover the reconstruction and correspondence systems most relevant to this pipeline.
+
 DuSt3R \cite{wang2024dust3rgeometric3dvision} represents a paradigm shift in 3D reconstruction by casting the problem as a direct regression of dense point maps from image pairs, bypassing the traditional pipeline of feature matching, essential matrix estimation, and triangulation. Built on standard Transformer encoders and decoders, DuSt3R shares information between views through cross-attention and leverages pre-trained vision weights to learn strong geometric and shape priors.
 
 A key property of DuSt3R is its agnosticism to camera parameters: the method requires no prior knowledge of camera intrinsics or extrinsic poses and can even perform monocular reconstruction from a single input image. For multi-image collections, a fast global alignment procedure expresses all pairwise point maps in a common reference frame, effectively stitching the scene together in 3D space.
@@ -74,9 +94,15 @@ The system operates through two complementary functions. An \textit{Update} func
 
 For the human tracking setting, CuT3R's persistent state mechanism is conceptually relevant: occlusion and re-entry are precisely the scenarios where a model that remembers prior geometry has an advantage over one that reconstructs from the current frame alone. However, CuT3R targets general scene reconstruction and does not explicitly model articulated motion, which remains the domain of body-specific representations such as SMPL.
 
-\section{SAM3D and MHR Priors}
+\section{Human Body Models: SMPL and MHR}
+\label{sec:smpl}
+Parametric body models provide a compact, differentiable representation of human shape and pose. SMPL \cite{loper2015smpl} (Skinned Multi-Person Linear Model) represents the body as a function of two parameter sets: shape parameters $\boldsymbol{\beta} \in \mathbb{R}^{10}$, which encode identity-specific body proportions, and pose parameters $\boldsymbol{\theta} \in \mathbb{R}^{72}$, which encode the joint rotation angles. Given $(\boldsymbol{\beta}, \boldsymbol{\theta})$, SMPL produces a triangulated mesh of 6,890 vertices and 13,776 faces. Critically, the mesh is fully deterministic and differentiable with respect to both parameter sets, making it amenable to fitting by gradient descent against image evidence.
+
+The Mesh Human Representation (MHR) extends the standard skeleton beyond the 17-joint COCO convention to 70 joints, adding detailed coverage of the hands (finger joints) and feet. This richer joint set allows body-part labels to be assigned at the level of individual fingers and toes, which is relevant when tracking hand-object interaction scenes such as those in DexYCB.
+
+\section{SAM-3D-Body}
 \label{sec:sam3d}
-SAM-3D-Body provides per-frame human mesh fits and keypoints, including 70 MHR joints per detected person. These joints define a compact semantic scaffold over the body that can be used to measure whether two candidate points are likely to correspond to similar anatomical regions, even under viewpoint changes or temporary occlusions.
+SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} is a per-frame, per-view human mesh recovery system that fits SMPL to monocular image crops. Given an input frame, it produces: 70 MHR joint positions in camera space ($\mathbf{p}_{\text{joints}} \in \mathbb{R}^{70 \times 3}$), the full SMPL mesh vertex set ($\mathbf{V} \in \mathbb{R}^{6890 \times 3}$), pose and shape parameters ($\boldsymbol{\theta}, \boldsymbol{\beta}$), and a camera-frame translation vector. The joints define a compact semantic scaffold over the body that can be used to measure whether two candidate points are likely to correspond to similar anatomical regions, even under viewpoint changes or temporary occlusions. The mesh vertices provide dense surface coverage of the entire body, including regions that are systematically under-represented in depth maps.
 
 % --- Chapter 3: Methodology ---
 \chapter{SAM3D-Enhanced MV-Tracker}
@@ -123,7 +149,7 @@ These results motivate a more direct intervention: rather than adjusting which e
 \subsection{Mechanism}
 The point cloud augmentation approach concatenates SAM3D SMPL mesh vertices directly into the depth-based point cloud before the kNN correlation search. This means that even where the depth sensor provides no coverage, the tracker can find body-surface points as nearest neighbours and compute meaningful correlations from them.
 
-SAM-3D-Body produces approximately 6,890 SMPL mesh vertices per detected person per frame in world coordinates. These are appended to the existing depth-based point cloud ($\sim$57k points) at each pyramid level, representing a $\sim$12\% increase in cloud size with modest computational overhead.
+SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} produces approximately 6,890 SMPL \cite{loper2015smpl} mesh vertices per detected person per frame in world coordinates. These are appended to the existing depth-based point cloud ($\sim$57k points) at each pyramid level, representing a $\sim$12\% increase in cloud size with modest computational overhead.
 
 \subsection{Feature Extraction for Mesh Vertices}
 Depth-based points carry 128-dimensional CNN feature vectors obtained by lifting 2D image features into 3D. Mesh vertices have no direct depth pixel to sample from, so their features are computed by multi-view projection:
@@ -141,7 +167,7 @@ The forward pass accepts an optional tensor \texttt{sam3d\_vertices\_world} of s
 \chapter{The Synthetic-to-Real Data Engine}
 \label{ch:data}
 \section{Pipeline Overview}
-We implemented a multi-stage offline data engine to produce MVTracker-compatible human trajectory supervision from Panoptic Studio data.
+Inspired by AnthroTAP \cite{kim2026anthrotaplearningpointtracking}, we implement a multi-stage offline data engine to produce MVTracker-compatible human trajectory supervision from Panoptic Studio \cite{joo2015panoptic} data.
 
 \textbf{Stage 1: Per-view SAM3D inference.} SAM-3D-Body is run independently on each camera stream to produce per-frame 3D keypoints (70 MHR joints), mesh vertices, pose and shape parameters, and camera-frame translations.
 
