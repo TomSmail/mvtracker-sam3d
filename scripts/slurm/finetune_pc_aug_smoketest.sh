@@ -6,7 +6,7 @@
 #SBATCH --mem-per-cpu=8G
 #SBATCH --gpus=1
 #SBATCH --gres=gpumem:80g
-#SBATCH --partition=gpuhe.4h
+#SBATCH --partition=gpupr.4h
 #SBATCH --time=4:00:00
 #SBATCH --output=./logs/slurm_logs/%x-%j.out
 
