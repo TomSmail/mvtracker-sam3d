@@ -360,15 +360,21 @@ class PanopticHumanTrajectoryDataset(Dataset):
             valids = torch.from_numpy(cache["valids"])
             query_points = torch.from_numpy(cache["query_points"])
         else:
-            # Filter to tracks visible in at least two frames
+            # Filter to tracks visible in at least two frames across any selected view
             visible_for_at_least_two_frames = visibility_t.any(0).sum(0) >= 2
             # Also require track to have valid data
             valid_in_most_frames = track_valid_t.sum(0) >= (n_frames * 0.5)
             valid_tracks = (visible_for_at_least_two_frames & valid_in_most_frames).nonzero(as_tuple=False)[:, 0]
 
             if len(valid_tracks) == 0:
-                warnings.warn(f"No valid tracks in {self.seq_names[index]}, using all tracks")
-                valid_tracks = torch.arange(n_tracks)
+                # Fall back to any track visible at least once in any selected view
+                any_visible = visibility_t.any(0).any(0)
+                valid_tracks = any_visible.nonzero(as_tuple=False)[:, 0]
+                if len(valid_tracks) == 0:
+                    raise RuntimeError(
+                        f"No tracks visible in selected views for {self.seq_names[index]}"
+                    )
+                warnings.warn(f"No valid tracks in {self.seq_names[index]}, using all visible tracks")
 
             point_inds = torch.randperm(len(valid_tracks), generator=rnd_torch)
             traj_per_sample = min(self.traj_per_sample or len(point_inds), len(valid_tracks))
