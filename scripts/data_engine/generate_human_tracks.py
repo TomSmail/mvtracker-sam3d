@@ -69,7 +69,7 @@ def load_sam3d_predictions(pred_dir, n_views, n_frames):
             if not os.path.exists(pred_file):
                 predictions[(view_idx, frame_idx)] = []
                 continue
-            data = np.load(pred_file)
+            data = np.load(pred_file, allow_pickle=True)
             n_persons = int(data["n_persons"])
             persons = []
             for p in range(n_persons):

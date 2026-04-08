@@ -14,7 +14,7 @@
 #   - 22 have sam3d_predictions → will be processed
 #   - 18 have no sam3d_predictions → skipped with warning
 
-set -x
+set -ex
 cat $0
 DIR=$(realpath .)
 mkdir -p $DIR/logs/slurm_logs
