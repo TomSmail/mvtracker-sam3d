@@ -66,7 +66,7 @@ def load_sam3d_predictions(pred_dir, n_views, n_frames):
             continue
         for frame_idx in range(n_frames):
             pred_file = os.path.join(view_dir, f"frame_{frame_idx:05d}.npz")
-            if not os.path.exists(pred_file):
+            if not os.path.exists(pred_file) or os.path.getsize(pred_file) == 0:
                 predictions[(view_idx, frame_idx)] = []
                 continue
             data = np.load(pred_file, allow_pickle=True)
