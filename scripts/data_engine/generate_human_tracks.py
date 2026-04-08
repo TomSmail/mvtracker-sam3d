@@ -364,15 +364,22 @@ def process_sequence(seq_path, n_vertex_samples=500, smooth_kernel=3,
     first_view_dir = os.path.join(ims_path, view_folders[0])
     n_frames = len(os.listdir(first_view_dir))
 
-    # Get image dimensions from the first readable image
+    # Get image dimensions from the first readable image across any view
     img_h, img_w = None, None
-    for img_fname in sorted(os.listdir(first_view_dir)):
-        first_img = cv2.imread(os.path.join(first_view_dir, img_fname))
-        if first_img is not None:
-            img_h, img_w = first_img.shape[:2]
+    for view_dir_name in view_folders:
+        candidate_dir = os.path.join(ims_path, view_dir_name)
+        for img_fname in sorted(os.listdir(candidate_dir)):
+            img_path = os.path.join(candidate_dir, img_fname)
+            if os.path.getsize(img_path) == 0:
+                continue
+            first_img = cv2.imread(img_path)
+            if first_img is not None:
+                img_h, img_w = first_img.shape[:2]
+                break
+        if img_h is not None:
             break
     if img_h is None:
-        warnings.warn(f"No readable images in {first_view_dir}, skipping {seq_path}")
+        warnings.warn(f"No readable images in any view of {seq_path}, skipping")
         return
 
     print(f"  Views: {n_views}, Frames: {n_frames}, Resolution: {img_w}x{img_h}")
