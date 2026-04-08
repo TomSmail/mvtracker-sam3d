@@ -174,11 +174,12 @@ def summarize_tracks_file(seq_path, jump_threshold):
             if pelvis_series:
                 pelvis_arr = np.stack(pelvis_series, axis=1)  # [T, P, 3]
                 speeds = np.linalg.norm(np.diff(pelvis_arr, axis=0), axis=2)  # [T-1, P]
-                motion["pelvis_speed_mean"] = float(speeds.mean())
-                motion["pelvis_speed_p95"] = float(np.percentile(speeds, 95))
-                motion["pelvis_jump_threshold"] = float(jump_threshold)
-                motion["pelvis_jump_frames"] = int((speeds > jump_threshold).sum())
-                motion["pelvis_jump_ratio"] = float((speeds > jump_threshold).mean())
+                if speeds.size > 0:
+                    motion["pelvis_speed_mean"] = float(speeds.mean())
+                    motion["pelvis_speed_p95"] = float(np.percentile(speeds, 95))
+                    motion["pelvis_jump_threshold"] = float(jump_threshold)
+                    motion["pelvis_jump_frames"] = int((speeds > jump_threshold).sum())
+                    motion["pelvis_jump_ratio"] = float((speeds > jump_threshold).mean())
         out["motion"] = motion
 
         # Simple identity ambiguity heuristic for >=2 people
