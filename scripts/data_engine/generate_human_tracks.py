@@ -348,6 +348,11 @@ def process_sequence(seq_path, n_vertex_samples=500, smooth_kernel=3,
         warnings.warn(f"No SAM3D predictions found at {pred_dir}")
         return
 
+    ann_file = os.path.join(seq_path, "tapvid3d_annotations.npz")
+    if not os.path.exists(ann_file):
+        warnings.warn(f"No annotations file found at {ann_file}, skipping")
+        return
+
     ann = load_annotations(seq_path)
     extrinsics = ann["extrinsics"]  # [n_views, 4, 4] or [n_views, 3, 4]
     intrinsics = ann["intrinsics"]  # [n_views, 3, 3]
@@ -359,9 +364,16 @@ def process_sequence(seq_path, n_vertex_samples=500, smooth_kernel=3,
     first_view_dir = os.path.join(ims_path, view_folders[0])
     n_frames = len(os.listdir(first_view_dir))
 
-    # Get image dimensions from the first image
-    first_img = cv2.imread(os.path.join(first_view_dir, sorted(os.listdir(first_view_dir))[0]))
-    img_h, img_w = first_img.shape[:2]
+    # Get image dimensions from the first readable image
+    img_h, img_w = None, None
+    for img_fname in sorted(os.listdir(first_view_dir)):
+        first_img = cv2.imread(os.path.join(first_view_dir, img_fname))
+        if first_img is not None:
+            img_h, img_w = first_img.shape[:2]
+            break
+    if img_h is None:
+        warnings.warn(f"No readable images in {first_view_dir}, skipping {seq_path}")
+        return
 
     print(f"  Views: {n_views}, Frames: {n_frames}, Resolution: {img_w}x{img_h}")
 
@@ -638,13 +650,18 @@ def main():
     for seq_name in sequences:
         seq_path = os.path.join(args.data_root, seq_name)
         print(f"\nSequence: {seq_name}")
-        process_sequence(
-            seq_path,
-            n_vertex_samples=args.n_vertex_samples,
-            smooth_kernel=args.smooth_kernel,
-            skip_existing=skip_existing,
-            max_persons=args.max_persons,
-        )
+        try:
+            process_sequence(
+                seq_path,
+                n_vertex_samples=args.n_vertex_samples,
+                smooth_kernel=args.smooth_kernel,
+                skip_existing=skip_existing,
+                max_persons=args.max_persons,
+            )
+        except Exception as e:
+            warnings.warn(f"Failed to process {seq_name}: {e}")
+            import traceback
+            traceback.print_exc()
 
     print("\n=== Track generation complete ===")
 
