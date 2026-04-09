@@ -421,6 +421,7 @@ def render_sample(seq_path, seq_name, max_size=640):
     try:
         with np.load(tracks_file, allow_pickle=True) as td:
             tracks_data = dict(td)
+        tracks_data["_seq_path"] = seq_path
         view_idx, frame_idx = find_readable_view_and_frame(seq_path, tracks_data)
 
         ims_path = os.path.join(seq_path, "ims")
@@ -456,6 +457,7 @@ def render_four_view_grid(seq_path, seq_name):
     try:
         with np.load(tracks_file, allow_pickle=True) as td:
             tracks_data = dict(td)
+        tracks_data["_seq_path"] = seq_path
         _, frame_idx = find_readable_view_and_frame(seq_path, tracks_data)
 
         ims_path = os.path.join(seq_path, "ims")
