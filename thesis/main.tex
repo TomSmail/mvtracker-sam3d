@@ -34,7 +34,7 @@ Tracking arbitrary 3D points through time is a core capability for scene underst
 
 This thesis investigates two strategies for injecting SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} human mesh priors into MVTracker. The first, kNN semantic bias, re-ranks neighbour candidates using body-part proximity scores derived from MHR-70 joints. This approach produced no measurable improvement, revealing that re-ranking a sparse or absent neighbour set cannot compensate for missing geometry. The second, point cloud augmentation, directly inserts SMPL \cite{loper2015smpl} mesh vertices into the depth-based point cloud with CNN features sampled via multi-view projection. This adds dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead (approximately 12\% increase in cloud size).
 
-To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. A cross-sequence quality audit over six sequences confirms reliable track completeness and coordinate consistency.
+To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. We scale this pipeline to all 90 Panoptic Studio sequences, successfully generating tracks for 67 of them; the remaining 23 fail due to missing annotations, absent SAM3D predictions, or corrupt imagery. A cross-sequence quality audit over six representative sequences confirms reliable track completeness and coordinate consistency across the processed set.
 
 We evaluate on three Panoptic Studio multi-view configurations and report 3D tracking accuracy and occlusion robustness, comparing the baseline depth-only model against the point cloud augmented variant before and after finetuning on human sequences.
 
@@ -188,6 +188,8 @@ Since the point cloud augmentation approach introduces no new learnable paramete
 
 Loss definitions remain unchanged from baseline MVTracker: a trajectory regression loss and a balanced visibility BCE loss. Optimisation uses AdamW with OneCycleLR. The augmentation is active throughout training, so the model learns correlation features over a point cloud that includes both depth points and SAM3D mesh vertices from the first training step.
 
+A preliminary run of 5,000 steps on only four Panoptic training sequences exhibited catastrophic forgetting: AJ on \texttt{panoptic-human-views1\_7\_14\_20} dropped from 56.5 to 36.3, suggesting that limited data diversity caused the backbone to overfit. The primary training run therefore uses all valid sequences from the full 90-sequence pipeline output (approximately 55 after filtering empty-room sequences), trained for 20,000 steps. Empty-room sequences --- those for which the generated \texttt{human\_tracks.npz} contains no valid track frames --- are automatically excluded by the dataset loader.
+
 % --- Chapter 5: Experiments & Results ---
 \chapter{Evaluation}
 \label{ch:eval}
@@ -212,20 +214,44 @@ The finetuning setup for the point cloud augmentation model uses the following v
     \item Base checkpoint: mvtracker\_200000\_june2025.pth (pre-trained for 200k steps on Kubric synthetic data).
     \item Trainable parameters: all ($\sim$22.6M), with full backbone unfrozen.
     \item Learning rate: 0.0005.
-    \item Training steps: 5,000 (approximately 13 epochs over 4 Panoptic training scenes).
+    \item Training steps: 20,000 over all $\sim$55 valid Panoptic training sequences.
     \item Batch size: 1 sequence per optimisation step.
     \item Sequence length: 24 frames.
     \item Tracks per sample: 384.
     \item Precision: bf16-mixed.
     \item Point cloud augmentation: SAM3D SMPL vertices ($\sim$6,890 per person) concatenated at each pyramid level.
-    \item Evaluation frequency: every 500 steps.
+    \item Evaluation frequency: every 2,000 steps.
 \end{itemize}
+
+\section{Main Results}
+\label{sec:results}
+
+Table~\ref{tab:main_results} reports the three primary comparisons on all three Panoptic view configurations. Higher AJ and $\delta^{0.10}$ are better; lower ATE is better.
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabularx}{\textwidth}{lcccccc}
+        \toprule
+        & \multicolumn{2}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{2}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{2}{c}{\texttt{views1\_4\_7\_11}} \\
+        \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+        Model & AJ$\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & ATE$\downarrow$ \\
+        \midrule
+        Baseline (depth only)          & 56.48 & 15.72 & 56.66 & 15.57 & 51.55 & 14.54 \\
+        PC-aug zero-shot               & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  \\
+        PC-aug finetuned (20k steps)   & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Main results on Panoptic Studio human sequences. AJ = 3D Average Jaccard (\%), ATE = Average Trajectory Error (mm). PC-aug zero-shot uses the pretrained checkpoint with SAM3D vertices added; PC-aug finetuned additionally trains for 20k steps on all $\sim$55 valid Panoptic human sequences.}
+    \label{tab:main_results}
+\end{table}
 
 \section{Model Training Evaluation}
 Model-centric analysis is structured in two stages. First, we compare the kNN semantic bias (zero-shot) against the baseline to characterise its failure mode and confirm that re-ranking without additional geometry provides no measurable benefit. Second, we evaluate the point cloud augmentation approach: comparing the zero-shot augmented model against the baseline, and then comparing pre- and post-finetuning performance to assess how much further benefit is gained from adapting the backbone to the augmented data. Per-metric deltas are reported for each Panoptic view configuration.
 
 \section{Data Pipeline Evaluation (Modified AnthroTAP)}
-To quantify the reliability of the modified AnthroTAP generation pipeline, we performed a cross-sequence quality audit over six sequences (basketball, boxes, football, juggle, softball, and tennis), comprising approximately 431M generated data points. The audit covered data completeness, temporal smoothness, multi-view coverage, visibility behaviour, and coordinate normalisation.
+The modified AnthroTAP pipeline was applied to all 90 Panoptic Studio sequences. Of these, 67 produced valid \texttt{human\_tracks.npz} files; the remaining 23 failed due to missing annotations (no \texttt{tapvid3d\_annotations.npz}), absent SAM3D predictions, or corrupt imagery. The 67 processed sequences cover a range of activity categories including haggling, sports (basketball, football, softball, tennis), object interaction (boxes, juggle), and social interactions (mafia, ultimatum). Failure modes were handled robustly by the pipeline: zero-byte prediction files are skipped, sequences with corrupt images are excluded during pre-filtering, and per-frame fallback logic ensures partial results are never written.
+
+To quantify track quality in detail, we performed a cross-sequence audit over six representative sequences (basketball, boxes, football, juggle, softball, and tennis), comprising approximately 431M generated data points. The audit covered data completeness, temporal smoothness, multi-view coverage, visibility behaviour, and coordinate normalisation.
 
 \subsection{Cross-Sequence Quality Summary}
 \begin{table}[htbp]
