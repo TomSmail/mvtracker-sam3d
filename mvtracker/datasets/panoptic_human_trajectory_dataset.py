@@ -156,6 +156,14 @@ class PanopticHumanTrajectoryDataset(Dataset):
                 if bad_view:
                     warnings.warn(f"Skipping {seq_name}: corrupt/missing images for required views")
                     continue
+            # Skip sequences with no valid tracks (empty-room recordings with no people)
+            try:
+                with np.load(tracks_file) as d:
+                    if "track_valid" in d and float(d["track_valid"].mean()) == 0.0:
+                        warnings.warn(f"Skipping {seq_name}: no valid tracks (empty room?)")
+                        continue
+            except Exception:
+                pass
             valid_seqs.append(seq_name)
 
         if max_videos is not None:

@@ -1,0 +1,39 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human_finetune_pc_aug_full
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_pointcloud_augmentation: true
+
+datasets:
+  root: ./datasets
+  train:
+    name: panoptic-human-training
+    batch_size: 1
+    sequence_len: 24
+    traj_per_sample: 384
+    num_workers: 8
+    max_videos: ~          # null = use all valid sequences (~55 after filtering empty rooms)
+  eval:
+    names:
+      - panoptic-human-views1_7_14_20
+      - panoptic-human-views27_16_14_8
+      - panoptic-human-views1_4_7_11
+    num_workers: 4
+    max_seq_len: 1000
+
+trainer:
+  num_steps: 20000
+  eval_freq: 2000
+  viz_freq: 2000
+  save_ckpt_freq: 2000
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false
+
+modes:
+  validate_at_start: true

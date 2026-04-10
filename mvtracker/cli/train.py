@@ -553,15 +553,15 @@ def main(cfg: DictConfig):
         train_dataset = KubricMultiViewDataset.from_name(cfg.datasets.train.name, cfg.datasets.root, cfg, fabric)
     elif cfg.datasets.train.name == "panoptic-human-training":
         # Pure human training: only Panoptic sequences with SAM3D guidance
-        logging.info("Creating Panoptic human training dataset (basketball, boxes, football, juggle)")
+        max_train_videos = cfg.datasets.train.get("max_videos", 4)
+        logging.info(f"Creating Panoptic human training dataset (max_videos={max_train_videos})")
 
-        # Training sequences only (test sequences are softball, tennis)
         train_dataset = PanopticHumanTrajectoryDataset(
             data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
             views_to_return=[1, 7, 14, 20],  # 4-view setup
             traj_per_sample=cfg.datasets.train.traj_per_sample,
             seed=None,  # random seed per epoch for frame subsampling
-            max_videos=4,  # basketball, boxes, football, juggle
+            max_videos=max_train_videos,
             use_cached_tracks=False,
             crop_size=cfg.augmentations.get("cropping_size", [384, 512]),
             seq_len=cfg.datasets.train.get("sequence_len", 24),
