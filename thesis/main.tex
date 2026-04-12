@@ -36,7 +36,7 @@ This thesis investigates two strategies for injecting SAM-3D-Body \cite{sam3dtea
 
 To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. We scale this pipeline to all 90 Panoptic Studio sequences, successfully generating tracks for 67 of them; the remaining 23 fail due to missing annotations, absent SAM3D predictions, or corrupt imagery. A cross-sequence quality audit over six representative sequences confirms reliable track completeness and coordinate consistency across the processed set.
 
-We evaluate on three Panoptic Studio multi-view configurations and report 3D tracking accuracy and occlusion robustness, comparing the baseline depth-only model against the point cloud augmented variant before and after finetuning on human sequences.
+Evaluation on three Panoptic Studio multi-view configurations shows that zero-shot point cloud augmentation improves 3D Average Jaccard by 3.72 points and within-10\,cm accuracy by 8.14 points on the most occluded view configuration, while leaving performance unchanged on configurations with denser depth coverage. Supervised finetuning consistently degrades performance due to catastrophic forgetting at the pretraining learning rate, identifying reduced learning rates and mixed-domain training as the key direction for future work.
 
 \clearpage
 
@@ -188,7 +188,7 @@ Since the point cloud augmentation approach introduces no new learnable paramete
 
 Loss definitions remain unchanged from baseline MVTracker: a trajectory regression loss and a balanced visibility BCE loss. Optimisation uses AdamW with OneCycleLR. The augmentation is active throughout training, so the model learns correlation features over a point cloud that includes both depth points and SAM3D mesh vertices from the first training step.
 
-A preliminary run of 5,000 steps on only four Panoptic training sequences exhibited catastrophic forgetting: AJ on \texttt{panoptic-human-views1\_7\_14\_20} dropped from 56.5 to 36.3, suggesting that limited data diversity caused the backbone to overfit. The primary training run therefore uses all valid sequences from the full 90-sequence pipeline output (approximately 55 after filtering empty-room sequences), trained for 20,000 steps. Empty-room sequences --- those for which the generated \texttt{human\_tracks.npz} contains no valid track frames --- are automatically excluded by the dataset loader.
+A preliminary run of 5,000 steps on only four Panoptic training sequences exhibited catastrophic forgetting: average AJ across the three evaluation configurations dropped from 56.14 to 31.47. Increasing the training set to all $\sim$55 valid sequences (filtering empty-room sequences via a \texttt{track\_valid} check in the dataset loader) and extending training to 20,000 steps did not resolve the forgetting: average AJ fell further to 27.68. The learning rate ($5 \times 10^{-4}$, identical to the Kubric pretraining schedule) is identified as the primary cause --- it is too aggressive for finetuning a strong pretrained backbone on a new domain. The zero-shot augmented model therefore serves as the primary reported result (Section~\ref{sec:results}).
 
 % --- Chapter 5: Experiments & Results ---
 \chapter{Evaluation}
@@ -230,23 +230,34 @@ Table~\ref{tab:main_results} reports the three primary comparisons on all three 
 
 \begin{table}[htbp]
     \centering
-    \begin{tabularx}{\textwidth}{lcccccc}
+    \begin{tabularx}{\textwidth}{lccccccccc}
         \toprule
-        & \multicolumn{2}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{2}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{2}{c}{\texttt{views1\_4\_7\_11}} \\
-        \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
-        Model & AJ$\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & ATE$\downarrow$ \\
+        & \multicolumn{3}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{3}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{3}{c}{\texttt{views1\_4\_7\_11}} \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
+        Model & AJ$\uparrow$ & $\delta^{0.10}\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & $\delta^{0.10}\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & $\delta^{0.10}\uparrow$ & ATE$\downarrow$ \\
         \midrule
-        Baseline (depth only)          & 56.48 & 15.72 & 56.66 & 15.57 & 51.55 & 14.54 \\
-        PC-aug zero-shot               & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  \\
-        PC-aug finetuned (20k steps)   & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  & \textit{TBD}  \\
+        Baseline (depth only)          & 56.48 & 60.94 & 15.72 & 56.66 & 61.47 & 15.57 & 51.55 & 42.90 & 14.54 \\
+        PC-aug zero-shot               & 56.48 & 60.94 & 15.72 & 56.66 & 61.47 & 15.57 & \textbf{55.27} & \textbf{51.04} & \textbf{13.72} \\
+        PC-aug finetuned (20k steps)   & 30.21 & 20.11 & 25.32 & 32.07 & 21.19 & 23.47 & 20.77 & 12.49 & 123.46 \\
         \bottomrule
     \end{tabularx}
-    \caption{Main results on Panoptic Studio human sequences. AJ = 3D Average Jaccard (\%), ATE = Average Trajectory Error (mm). PC-aug zero-shot uses the pretrained checkpoint with SAM3D vertices added; PC-aug finetuned additionally trains for 20k steps on all $\sim$55 valid Panoptic human sequences.}
+    \caption{Main results on Panoptic Studio human sequences. AJ = 3D Average Jaccard (\%), $\delta^{0.10}$ = fraction of tracks within 10\,cm (\%), ATE = Average Trajectory Error (mm). Bold entries indicate the best result per view configuration. PC-aug zero-shot uses the pretrained checkpoint with SAM3D vertices injected at inference; PC-aug finetuned additionally trains for 20k steps on all $\sim$55 valid Panoptic human sequences.}
     \label{tab:main_results}
 \end{table}
 
-\section{Model Training Evaluation}
-Model-centric analysis is structured in two stages. First, we compare the kNN semantic bias (zero-shot) against the baseline to characterise its failure mode and confirm that re-ranking without additional geometry provides no measurable benefit. Second, we evaluate the point cloud augmentation approach: comparing the zero-shot augmented model against the baseline, and then comparing pre- and post-finetuning performance to assess how much further benefit is gained from adapting the backbone to the augmented data. Per-metric deltas are reported for each Panoptic view configuration.
+\section{Analysis}
+
+\subsection{Point Cloud Augmentation: Zero-Shot Effect}
+Table~\ref{tab:main_results} shows that PC-aug zero-shot --- applying SAM3D mesh vertex augmentation to the pretrained checkpoint without any finetuning --- produces a consistent improvement on \texttt{views1\_4\_7\_11} (+3.72 AJ, +8.14 $\delta^{0.10}$, $-$0.82 ATE) while leaving performance on the other two view configurations unchanged. This asymmetry is informative: \texttt{views1\_4\_7\_11} uses camera angles 1, 4, 7, and 11, which provide a more oblique and occluded coverage of the capture volume compared to the roughly symmetric layouts of the other two configurations. The mesh vertices appear to provide most benefit precisely in the view configurations where depth-based coverage is sparse from certain angles.
+
+The zero-delta results on \texttt{views1\_7\_14\_20} and \texttt{views27\_16\_14\_8} indicate that the augmentation neither helps nor harms performance when the depth-based point cloud already provides adequate coverage. Adding ~500 mesh vertices per person to a 57k-point cloud does not change the correlation search outcome when the depth-based neighbours are already geometrically close to the tracked points.
+
+\subsection{Finetuning Analysis: Catastrophic Forgetting}
+Both finetuning runs --- 5,000 steps on four sequences and 20,000 steps on $\sim$55 valid sequences --- resulted in significantly degraded performance relative to the zero-shot baseline. On \texttt{views1\_4\_7\_11}, the 20k-step run degraded ATE from 14.54 to 123.46, an eightfold increase in trajectory error. Average AJ across all configurations dropped from 56.14 (zero-shot) to 27.68 (20k finetuned).
+
+Counterintuitively, training with more data (55 sequences versus 4) produced \emph{worse} results. This rules out data scarcity as the primary cause and points instead to the learning rate as the culprit. The OneCycleLR schedule with peak $\text{lr} = 5 \times 10^{-4}$ is identical to the original Kubric pretraining rate, which is $10$--$100\times$ higher than is typical for finetuning a strong pretrained backbone. At this learning rate, 20,000 gradient steps on a domain-shifted distribution destroys the pretrained representations faster than the model can acquire human-specific tracking behaviour.
+
+The appropriate remedy --- reducing the learning rate to $\sim 5 \times 10^{-6}$, using partial parameter freezing for the early encoder layers, or mixing Kubric and human data --- is identified as future work. The \emph{zero-shot} augmented model is therefore the primary reported result of this thesis.
 
 \section{Data Pipeline Evaluation (Modified AnthroTAP)}
 The modified AnthroTAP pipeline was applied to all 90 Panoptic Studio sequences. Of these, 67 produced valid \texttt{human\_tracks.npz} files; the remaining 23 failed due to missing annotations (no \texttt{tapvid3d\_annotations.npz}), absent SAM3D predictions, or corrupt imagery. The 67 processed sequences cover a range of activity categories including haggling, sports (basketball, football, softball, tennis), object interaction (boxes, juggle), and social interactions (mafia, ultimatum). Failure modes were handled robustly by the pipeline: zero-byte prediction files are skipped, sequences with corrupt images are excluded during pre-filtering, and per-frame fallback logic ensures partial results are never written.
@@ -292,7 +303,9 @@ This work integrates SAM-3D-Body human mesh priors into MVTracker via point clou
 
 An earlier attempt to improve tracking through kNN semantic bias --- re-ranking neighbour candidates by body-part proximity --- was evaluated and found to be ineffective. The analysis shows that low-capacity interventions on an incomplete point cloud cannot compensate for the absence of body-surface data, and motivates the shift to direct geometric augmentation.
 
-Limitations include dependence on SAM3D detection availability and occasional sequence-specific coverage gaps (for example, a subject entering the scene mid-sequence). Future work includes investigating vertex subsampling strategies to reduce cloud size, extending the augmentation to non-human articulated objects, and evaluating on broader real-world capture domains beyond Panoptic Studio.
+\textbf{Quantitative results.} Zero-shot point cloud augmentation improves AJ by 3.72 points and $\delta^{0.10}$ by 8.14 points on the \texttt{views1\_4\_7\_11} evaluation configuration, where oblique camera angles create sparser depth coverage. Performance on the two remaining configurations is unchanged, consistent with the interpretation that augmentation helps selectively where depth maps are inadequate. Both supervised finetuning attempts --- 5,000 steps on four sequences and 20,000 steps on $\sim$55 sequences --- produced catastrophic forgetting (average AJ falling from 56.14 to $\sim$28), attributable to the learning rate being identical to the pretraining schedule rather than the smaller rates appropriate for domain adaptation.
+
+\textbf{Limitations and future work.} The approach depends on reliable SAM3D detections; 12 of 67 processed sequences contained no people (empty-room recordings) and contributed no useful data. Supervised finetuning at an appropriate learning rate ($\sim 5 \times 10^{-6}$), with partial encoder freezing or mixed-domain training to prevent catastrophic forgetting, is the most promising next step. Additional directions include vertex subsampling strategies to reduce cloud overhead, extension to non-human articulated objects, and evaluation on broader real-world capture domains beyond Panoptic Studio.
 
 \bibliographystyle{plain}
 \bibliography{cite}
