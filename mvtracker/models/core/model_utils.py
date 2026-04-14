@@ -492,12 +492,18 @@ def augment_pointcloud_with_mesh_vertices(
         stride: int,
         level: int = 0,
         pointcloud_valid: Optional[torch.Tensor] = None,
+        depths: Optional[torch.Tensor] = None,
+        fusion_mode: str = 'mean',
+        alpha_depth: float = 15.0,
+        alpha_feat: float = 5.0,
+        min_confidence: float = 0.0,
 ) -> tuple:
     """
     Augment the depth-based point cloud with SAM3D mesh vertices.
 
     Projects mesh vertices into each view's feature map, bilinearly samples features,
-    and averages across visible views. Concatenates the result to the existing point cloud.
+    and fuses across views using the specified fusion mode. Concatenates the result to
+    the existing point cloud.
 
     Args:
         pointcloud_xyz:  (B*S, V*H*W, 3)
@@ -509,6 +515,11 @@ def augment_pointcloud_with_mesh_vertices(
         stride:          base pixel stride (before pyramid scaling)
         level:           pyramid level (fmaps are pooled by 2^level)
         pointcloud_valid: (B*S, V*H*W) optional validity mask
+        depths:          (B, V, S, 1, H, W) depth maps for depth-consistency weighting
+        fusion_mode:     'mean' (simple average), 'depth_weighted', or 'consensus'
+        alpha_depth:     sharpness for depth-consistency weighting
+        alpha_feat:      sharpness for feature consensus weighting
+        min_confidence:  filter vertices with max view weight below this threshold
 
     Returns:
         Augmented (pointcloud_xyz, pointcloud_fvec) and optionally pointcloud_valid.
@@ -526,14 +537,33 @@ def augment_pointcloud_with_mesh_vertices(
     else:
         H, W = H_orig, W_orig
 
+    # Pool depths to the same pyramid level (for depth-consistency weighting)
+    if depths is not None and fusion_mode in ('depth_weighted', 'consensus'):
+        if level > 0:
+            depths_flat = depths.reshape(B * V * S, 1, depths.shape[-2], depths.shape[-1])
+            for _ in range(level):
+                depths_flat = F.avg_pool2d(depths_flat, 2, stride=2)
+            depths_pooled = depths_flat.reshape(B, V, S, 1, H, W)
+        else:
+            depths_pooled = depths
+    else:
+        depths_pooled = None
+
     effective_stride = stride * 2 ** level
     BS = B * S
     M = mesh_vertices.shape[1]
     device = mesh_vertices.device
+    use_depth_weighting = fusion_mode in ('depth_weighted', 'consensus') and depths_pooled is not None
+    use_consensus = fusion_mode == 'consensus' and depths_pooled is not None
 
-    # Accumulate features across views via masked mean
+    # Accumulate features across views via weighted mean
     feat_sum = torch.zeros(BS, M, C, device=device, dtype=fmaps.dtype)
-    view_count = torch.zeros(BS, M, 1, device=device, dtype=fmaps.dtype)
+    weight_sum = torch.zeros(BS, M, 1, device=device, dtype=fmaps.dtype)
+
+    # For consensus mode, store per-view data for the second pass
+    if use_consensus:
+        per_view_feats = []
+        per_view_weights = []
 
     for v in range(V):
         # Get per-frame intrinsics and extrinsics for this view: (B, S, ...)
@@ -571,13 +601,67 @@ def augment_pointcloud_with_mesh_vertices(
         sampled = bilinear_sample2d(fmap_v, feat_x, feat_y)  # (BS, C, M)
         sampled = sampled.permute(0, 2, 1)  # (BS, M, C)
 
-        # Mask and accumulate
-        vis_mask = visible.unsqueeze(-1)  # (BS, M, 1)
-        feat_sum = feat_sum + sampled * vis_mask
-        view_count = view_count + vis_mask.float()
+        vis_mask = visible.unsqueeze(-1).float()  # (BS, M, 1)
 
-    # Average across visible views; zero features where no view sees the vertex
-    mesh_fvec = feat_sum / (view_count + 1e-8)  # (BS, M, C)
+        # Compute per-view weight
+        if use_depth_weighting:
+            # Sample depth map at projected pixel location
+            dmap_v = depths_pooled[:, v].reshape(BS, 1, H, W)  # (BS, 1, H, W)
+            sampled_depth = bilinear_sample2d(dmap_v, feat_x, feat_y)  # (BS, 1, M)
+            sampled_depth = sampled_depth.permute(0, 2, 1)  # (BS, M, 1)
+
+            # Depth consistency: ratio of depth map value to projected vertex depth
+            # ratio ~ 1.0 means vertex is at the visible surface; ratio << 1 means occluded
+            depth_ratio = sampled_depth / (cam_z.abs() + 1e-8)
+            # Also ignore where depth map is zero/invalid
+            depth_valid = (sampled_depth > 1e-4).float()
+            w_depth = torch.exp(-alpha_depth * (1.0 - depth_ratio).abs()) * depth_valid
+            # For invalid depth, fall back to binary visibility (weight=1)
+            w_depth = w_depth + (1.0 - depth_valid)
+
+            view_weight = vis_mask * w_depth  # (BS, M, 1)
+        else:
+            view_weight = vis_mask  # (BS, M, 1)
+
+        # Accumulate
+        feat_sum = feat_sum + sampled * view_weight
+        weight_sum = weight_sum + view_weight
+
+        if use_consensus:
+            per_view_feats.append(sampled)
+            per_view_weights.append(view_weight)
+
+    if use_consensus and len(per_view_feats) > 0:
+        # Two-pass fusion: compute warm mean, then re-weight by feature consensus
+        warm_mean = feat_sum / (weight_sum + 1e-8)  # (BS, M, C)
+
+        # Second pass: re-accumulate with consensus weighting
+        feat_sum_refined = torch.zeros_like(feat_sum)
+        weight_sum_refined = torch.zeros_like(weight_sum)
+
+        for v in range(V):
+            feat_v = per_view_feats[v]  # (BS, M, C)
+            w_v = per_view_weights[v]  # (BS, M, 1)
+
+            # Cosine similarity between this view's feature and the warm mean
+            cos_sim = F.cosine_similarity(feat_v, warm_mean, dim=-1).unsqueeze(-1)  # (BS, M, 1)
+            w_consensus = torch.exp(alpha_feat * cos_sim)  # higher similarity = higher weight
+
+            w_total = w_v * w_consensus
+            feat_sum_refined = feat_sum_refined + feat_v * w_total
+            weight_sum_refined = weight_sum_refined + w_total
+
+        mesh_fvec = feat_sum_refined / (weight_sum_refined + 1e-8)
+    else:
+        # Simple weighted (or unweighted) mean
+        mesh_fvec = feat_sum / (weight_sum + 1e-8)  # (BS, M, C)
+
+    # Optional: filter low-confidence vertices
+    if min_confidence > 0.0:
+        max_weight = weight_sum.squeeze(-1)  # (BS, M)
+        confident = max_weight > min_confidence
+        # Keep all vertices but zero out features for low-confidence ones
+        mesh_fvec = mesh_fvec * confident.unsqueeze(-1).float()
 
     # Concatenate to existing point cloud
     aug_xyz = torch.cat([pointcloud_xyz, mesh_vertices], dim=1)

@@ -113,6 +113,10 @@ class MVTracker(nn.Module):
             use_sam3d_knn_bias: bool = False,
             sam3d_knn_overfetch: int = 4,
             use_sam3d_pointcloud_augmentation: bool = False,
+            pc_aug_fusion_mode: str = 'mean',
+            pc_aug_alpha_depth: float = 15.0,
+            pc_aug_alpha_feat: float = 5.0,
+            pc_aug_min_confidence: float = 0.0,
     ):
         super().__init__()
 
@@ -132,6 +136,10 @@ class MVTracker(nn.Module):
         self.use_sam3d_knn_bias = use_sam3d_knn_bias
         self.sam3d_knn_overfetch = sam3d_knn_overfetch
         self.use_sam3d_pointcloud_augmentation = use_sam3d_pointcloud_augmentation
+        self.pc_aug_fusion_mode = pc_aug_fusion_mode
+        self.pc_aug_alpha_depth = pc_aug_alpha_depth
+        self.pc_aug_alpha_feat = pc_aug_alpha_feat
+        self.pc_aug_min_confidence = pc_aug_min_confidence
         if use_sam3d_knn_bias:
             self.sam3d_bias_lambda = nn.Parameter(torch.tensor(0.1))
             self.sam3d_bias_tau = nn.Parameter(torch.tensor(0.15))
@@ -331,29 +339,27 @@ class MVTracker(nn.Module):
 
             # Augment point cloud with SAM3D mesh vertices
             if self.use_sam3d_pointcloud_augmentation and sam3d_vertices is not None:
+                augment_kwargs = dict(
+                    pointcloud_xyz=pc_xyz,
+                    pointcloud_fvec=pc_fvec,
+                    mesh_vertices=sam3d_vertices,
+                    fmaps=fmaps,
+                    intrs=intrs,
+                    extrs=extrs,
+                    stride=self.stride,
+                    level=lvl,
+                    pointcloud_valid=pc_valid,
+                    depths=depths,
+                    fusion_mode=self.pc_aug_fusion_mode,
+                    alpha_depth=self.pc_aug_alpha_depth,
+                    alpha_feat=self.pc_aug_alpha_feat,
+                    min_confidence=self.pc_aug_min_confidence,
+                )
                 if pc_valid is not None:
-                    pc_xyz, pc_fvec, pc_valid = augment_pointcloud_with_mesh_vertices(
-                        pointcloud_xyz=pc_xyz,
-                        pointcloud_fvec=pc_fvec,
-                        mesh_vertices=sam3d_vertices,
-                        fmaps=fmaps,
-                        intrs=intrs,
-                        extrs=extrs,
-                        stride=self.stride,
-                        level=lvl,
-                        pointcloud_valid=pc_valid,
-                    )
+                    pc_xyz, pc_fvec, pc_valid = augment_pointcloud_with_mesh_vertices(**augment_kwargs)
                 else:
-                    pc_xyz, pc_fvec = augment_pointcloud_with_mesh_vertices(
-                        pointcloud_xyz=pc_xyz,
-                        pointcloud_fvec=pc_fvec,
-                        mesh_vertices=sam3d_vertices,
-                        fmaps=fmaps,
-                        intrs=intrs,
-                        extrs=extrs,
-                        stride=self.stride,
-                        level=lvl,
-                    )
+                    augment_kwargs.pop('pointcloud_valid')
+                    pc_xyz, pc_fvec = augment_pointcloud_with_mesh_vertices(**augment_kwargs)
 
             fcorr_fns[lvl] = PointcloudCorrBlock(
                 k=self.corr_neighbors,

@@ -24,6 +24,10 @@ model:
   use_sam3d_knn_bias: false          # set true to enable SAM3D-guided kNN re-ranking
   sam3d_knn_overfetch: 4             # over-fetch factor k' = k * overfetch before re-ranking
   use_sam3d_pointcloud_augmentation: false  # set true to augment point cloud with SAM3D mesh vertices
+  pc_aug_fusion_mode: 'mean'               # 'mean', 'depth_weighted', or 'consensus' (MV-SAM3D-inspired)
+  pc_aug_alpha_depth: 15.0                 # sharpness for depth-consistency weighting
+  pc_aug_alpha_feat: 5.0                   # sharpness for feature consensus weighting
+  pc_aug_min_confidence: 0.0               # filter vertices with max weight below this
 
 evaluation:
   interp_shape: [ 384, 512 ]
