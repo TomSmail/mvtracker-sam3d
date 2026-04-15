@@ -36,6 +36,8 @@ This thesis investigates two strategies for injecting SAM-3D-Body \cite{sam3dtea
 
 To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. We scale this pipeline to all 90 Panoptic Studio sequences, successfully generating tracks for 67 of them; the remaining 23 fail due to missing annotations, absent SAM3D predictions, or corrupt imagery. A cross-sequence quality audit over six representative sequences confirms reliable track completeness and coordinate consistency across the processed set.
 
+To address feature noise from occluded views, we adapt the entropy-weighted multi-view fusion principle from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} --- originally developed for generative 3D reconstruction --- to the tracking setting: mesh vertex features are weighted by depth-consistency and feature-consensus signals rather than averaged uniformly across views, requiring no additional learnable parameters.
+
 Evaluation on three Panoptic Studio multi-view configurations shows that zero-shot point cloud augmentation improves 3D Average Jaccard by 3.72 points and within-10\,cm accuracy by 8.14 points on the most occluded view configuration, while leaving performance unchanged on configurations with denser depth coverage. Supervised finetuning consistently degrades performance due to catastrophic forgetting at the pretraining learning rate, identifying reduced learning rates and mixed-domain training as the key direction for future work.
 
 \clearpage
@@ -53,7 +55,7 @@ Human-centric 3D point tracking is a particularly challenging variant of general
 
 This thesis investigates whether directly enriching the 3D point cloud with human mesh geometry can improve track consistency and robustness under these conditions. We integrate SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} outputs into MVTracker by augmenting the depth-based point cloud with SMPL mesh vertices, providing explicit geometric coverage of the human body surface where depth maps are unreliable. We also build a dedicated human data engine that provides dense trajectory supervision from Panoptic Studio sequences.
 
-The key contributions are threefold. First, we implement and evaluate a kNN semantic bias approach that re-ranks neighbour candidates by body-part proximity; this approach did not produce measurable improvement, and its failure motivates a more direct intervention. Second, we introduce a point cloud augmentation strategy that inserts SAM3D mesh vertices directly into the depth-based point cloud (with CNN features sampled via multi-view projection), requiring zero new learnable parameters. Third, we design and validate a human-centric trajectory generation pipeline that converts multi-view SAM3D fits into MVTracker-compatible supervision with explicit visibility modelling.
+The key contributions are fourfold. First, we implement and evaluate a kNN semantic bias approach that re-ranks neighbour candidates by body-part proximity; this approach did not produce measurable improvement, and its failure motivates a more direct intervention. Second, we introduce a point cloud augmentation strategy that inserts SAM3D mesh vertices directly into the depth-based point cloud (with CNN features sampled via multi-view projection), requiring zero new learnable parameters. Third, we adapt the entropy-weighted multi-view fusion principle from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} to weight each view's feature contribution by depth consistency and feature consensus, ensuring that occluded or unreliable views do not corrupt mesh vertex descriptors. Fourth, we design and validate a human-centric trajectory generation pipeline that converts multi-view SAM3D fits into MVTracker-compatible supervision with explicit visibility modelling.
 
 % --- Chapter 2: Background & Related Work ---
 \chapter{Background}
@@ -103,6 +105,26 @@ The Mesh Human Representation (MHR) extends the standard skeleton beyond the 17-
 \section{SAM-3D-Body}
 \label{sec:sam3d}
 SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} is a per-frame, per-view human mesh recovery system that fits SMPL to monocular image crops. Given an input frame, it produces: 70 MHR joint positions in camera space ($\mathbf{p}_{\text{joints}} \in \mathbb{R}^{70 \times 3}$), the full SMPL mesh vertex set ($\mathbf{V} \in \mathbb{R}^{6890 \times 3}$), pose and shape parameters ($\boldsymbol{\theta}, \boldsymbol{\beta}$), and a camera-frame translation vector. The joints define a compact semantic scaffold over the body that can be used to measure whether two candidate points are likely to correspond to similar anatomical regions, even under viewpoint changes or temporary occlusions. The mesh vertices provide dense surface coverage of the entire body, including regions that are systematically under-represented in depth maps.
+
+\section{Multi-View Fusion via Entropy Weighting}
+\label{sec:mvsam3d}
+MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} addresses a challenge common to multi-view systems: not all views contribute equally to a given spatial location. In a multi-view 3D generation setting, MV-SAM3D observes that na\"ively averaging latent representations across views produces blurred geometry because occluded or ambiguous views dilute confident ones. Their solution is an entropy-weighted fusion scheme with two passes:
+
+\begin{enumerate}
+    \item \textbf{Warmup pass.} A single denoising step is run with simple view averaging. Cross-attention patterns are collected for each latent position and each view.
+    \item \textbf{Entropy computation.} For each latent position $i$ and view $v$, the Shannon entropy of the attention distribution over image patches is computed:
+    \begin{equation}
+        H_v(i) = -\sum_j p_{ij} \log p_{ij},
+    \end{equation}
+    where $p_{ij}$ is the normalised attention weight from latent $i$ to patch $j$. Low entropy indicates the view attends confidently to a specific image region; high entropy indicates diffuse, uncertain attention.
+    \item \textbf{Weighted fusion.} Per-view weights are derived via a temperature-scaled softmax over inverted entropies:
+    \begin{equation}
+        w_v(i) = \frac{\exp(-\alpha \cdot H_v(i))}{\sum_{v'} \exp(-\alpha \cdot H_{v'}(i))},
+    \end{equation}
+    with $\alpha$ controlling sharpness (typically 30--60). The fused latent is then $\mathbf{z}(i) = \sum_v w_v(i) \cdot \mathbf{z}_v(i)$.
+\end{enumerate}
+
+Although MV-SAM3D operates in a generative diffusion setting rather than point tracking, the core insight --- that multi-view fusion should be confidence-weighted rather than uniform --- transfers directly. In Chapter~\ref{ch:method}, we adapt this principle to the point cloud augmentation pipeline: instead of averaging CNN features equally across views when computing mesh vertex descriptors, we weight each view's contribution by a geometric confidence signal (depth consistency), ensuring that occluded or unreliable views do not corrupt the fused feature.
 
 % --- Chapter 3: Methodology ---
 \chapter{SAM3D-Enhanced MV-Tracker}
@@ -160,8 +182,32 @@ Depth-based points carry 128-dimensional CNN feature vectors obtained by lifting
 \end{enumerate}
 This gives each mesh vertex a geometrically grounded appearance descriptor consistent with those of the surrounding depth points, requiring no new learnable parameters.
 
+\subsection{Depth-Weighted Multi-View Feature Fusion}
+\label{sec:depth_weighted_fusion}
+The simple averaging scheme described above treats all views equally when computing mesh vertex features. However, a vertex that is occluded in a given view --- for instance, because the person's arm is between the vertex and the camera --- will produce a feature sampled from the occluding surface rather than from the vertex's true appearance. Inspired by the entropy-weighted fusion in MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} (Section~\ref{sec:mvsam3d}), we replace uniform averaging with a confidence-weighted scheme that requires no learnable parameters.
+
+For each mesh vertex $\mathbf{v}$ projected into view $v$, we compare the projected depth $z_{\text{proj}}$ (the vertex's distance from the camera) against the depth map value $z_{\text{map}}$ sampled at the projected pixel location. If the depth map records a closer surface ($z_{\text{map}} \ll z_{\text{proj}}$), the vertex is likely occluded in that view. The per-view weight is:
+\begin{equation}
+    w_{\text{depth}}(v) = \exp\!\left(-\alpha_d \left\lvert 1 - \frac{z_{\text{map}}}{z_{\text{proj}}} \right\rvert\right),
+\end{equation}
+where $\alpha_d$ controls sharpness (default 15.0). When $z_{\text{map}} \approx z_{\text{proj}}$ (the vertex is at the visible surface), $w_{\text{depth}} \approx 1$; when they diverge significantly, $w_{\text{depth}} \to 0$. For pixels where the depth map is invalid (zero or missing), the weight falls back to 1.0 (unweighted).
+
+The fused feature vector for vertex $\mathbf{v}$ is then the weighted mean:
+\begin{equation}
+    \mathbf{f}(\mathbf{v}) = \frac{\sum_{v \in \mathcal{V}_{\text{vis}}} w_{\text{depth}}(v) \cdot \mathbf{f}_v(\mathbf{v})}{\sum_{v \in \mathcal{V}_{\text{vis}}} w_{\text{depth}}(v)},
+\end{equation}
+where $\mathcal{V}_{\text{vis}}$ is the set of views where the vertex projects within image bounds with positive depth.
+
+An optional second pass implements feature consensus weighting, analogous to MV-SAM3D's two-pass warmup-then-refine approach. After computing the depth-weighted mean $\bar{\mathbf{f}}$, each view's feature is compared to the consensus via cosine similarity:
+\begin{equation}
+    w_{\text{cons}}(v) = \exp\!\left(\alpha_f \cdot \frac{\mathbf{f}_v \cdot \bar{\mathbf{f}}}{\lVert \mathbf{f}_v \rVert \lVert \bar{\mathbf{f}} \rVert}\right),
+\end{equation}
+with $\alpha_f = 5.0$. The final weight combines both signals: $w(v) = w_{\text{depth}}(v) \cdot w_{\text{cons}}(v)$. This ensures that views which are both geometrically consistent and produce features in agreement with other views receive the highest weight.
+
+Since all weights are derived from geometry and feature statistics (no learnable parameters), the depth-weighted fusion operates zero-shot with the pretrained MVTracker checkpoint, avoiding the catastrophic forgetting observed during finetuning.
+
 \subsection{Backward Compatibility}
-The forward pass accepts an optional tensor \texttt{sam3d\_vertices\_world} of shape $(B, T, n_{\text{persons}}, V, 3)$, where $V \approx 6890$. When this tensor is absent, the augmentation step is skipped and the model behaves identically to the baseline MVTracker. The kNN bias code (Section~\ref{sec:knn_bias}) remains in the codebase and can be combined with augmentation, but the primary experiments evaluate augmentation alone.
+The forward pass accepts an optional tensor \texttt{sam3d\_vertices\_world} of shape $(B, T, n_{\text{persons}}, V, 3)$, where $V \approx 6890$. When this tensor is absent, the augmentation step is skipped and the model behaves identically to the baseline MVTracker. The fusion mode is configurable: \texttt{mean} reproduces the original uniform averaging, \texttt{depth\_weighted} enables depth-consistency weighting, and \texttt{consensus} adds the two-pass feature consensus refinement. The kNN bias code (Section~\ref{sec:knn_bias}) remains in the codebase and can be combined with augmentation, but the primary experiments evaluate augmentation alone.
 
 % --- Chapter 4: Data Generation & Training ---
 \chapter{The Synthetic-to-Real Data Engine}
@@ -299,7 +345,7 @@ Qualitative inspection focuses on articulation-heavy motion and prolonged self-o
 
 % --- Chapter 6: Conclusion ---
 \chapter{Conclusion}
-This work integrates SAM-3D-Body human mesh priors into MVTracker via point cloud augmentation and a dedicated human data engine. Rather than modifying the correlation algorithm, augmentation directly addresses the root cause of tracking failures on human bodies: missing geometry in the depth-based point cloud. By concatenating SMPL mesh vertices with CNN features sampled via multi-view projection, the approach introduces dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead.
+This work integrates SAM-3D-Body human mesh priors into MVTracker via point cloud augmentation and a dedicated human data engine. Rather than modifying the correlation algorithm, augmentation directly addresses the root cause of tracking failures on human bodies: missing geometry in the depth-based point cloud. By concatenating SMPL mesh vertices with CNN features sampled via multi-view projection, the approach introduces dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead. Additionally, adapting the entropy-weighted fusion principle from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} to weight each view's feature contribution by depth consistency and feature consensus ensures that occluded views do not corrupt the fused vertex descriptors.
 
 An earlier attempt to improve tracking through kNN semantic bias --- re-ranking neighbour candidates by body-part proximity --- was evaluated and found to be ineffective. The analysis shows that low-capacity interventions on an incomplete point cloud cannot compensate for the absence of body-surface data, and motivates the shift to direct geometric augmentation.
 
