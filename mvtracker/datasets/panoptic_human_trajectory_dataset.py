@@ -26,6 +26,7 @@ import warnings
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
 from torch.utils.data import Dataset
 
@@ -81,6 +82,11 @@ class PanopticHumanTrajectoryDataset(Dataset):
             use_zero_depth = True
             non_parsed = non_parsed.replace("-zerodepth", "", 1)
 
+        use_duster_depths = False
+        if non_parsed.startswith("-duster"):
+            use_duster_depths = True
+            non_parsed = non_parsed.replace("-duster", "", 1)
+
         assert non_parsed == "", f"Unparsed part of the dataset name: {non_parsed}"
 
         return PanopticHumanTrajectoryDataset(
@@ -92,6 +98,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
             max_videos=6,
             use_cached_tracks=use_cached_tracks,
             use_zero_depth=use_zero_depth,
+            use_duster_depths=use_duster_depths,
             crop_size=None,
             seq_len=None,
         )
@@ -106,6 +113,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
         max_videos=None,
         use_cached_tracks=False,
         use_zero_depth=False,
+        use_duster_depths=False,
         crop_size=None,
         seq_len=None,
     ):
@@ -117,6 +125,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
         self.seed = seed
         self.use_cached_tracks = use_cached_tracks
         self.use_zero_depth = use_zero_depth
+        self.use_duster_depths = use_duster_depths
         self.crop_size = crop_size  # (H, W) tuple or None
         self.seq_len = seq_len  # max frames to use, or None for all
         self.cache_name = self._cache_key()
@@ -259,7 +268,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
         rgbs = np.stack([views[v]["rgb"] for v in views_to_return])
         n_views, n_frames_total, h, w, _ = rgbs.shape
 
-        # Load depths (from dynamic3dgs or zeros)
+        # Load depths (from dynamic3dgs, duster, or zeros)
         depth_list = []
         for v in views_to_return:
             if views[v]["depth"] is not None:
@@ -267,6 +276,26 @@ class PanopticHumanTrajectoryDataset(Dataset):
             else:
                 depth_list.append(np.zeros((n_frames_total, h, w)))
         depths = np.stack(depth_list)[..., None].astype(np.float32)
+
+        # Optionally replace with DUSt3R depths
+        if self.use_duster_depths:
+            import pathlib
+            views_str = "_".join(map(str, views_to_return))
+            duster_root = pathlib.Path(datapoint_path) / f'duster-views-{views_str}'
+            if not duster_root.exists():
+                raise FileNotFoundError(f"DUSt3R root {duster_root} does not exist. Run estimate_depth_with_duster.py first.")
+
+            duster_depths = []
+            for frame_idx in range(n_frames_total):
+                scene_file = duster_root / f"3d_model__{frame_idx:05d}__scene.npz"
+                if not scene_file.exists():
+                    raise FileNotFoundError(f"DUSt3R scene file {scene_file} not found")
+                scene = np.load(scene_file)
+                duster_depth = torch.from_numpy(scene["depths"])  # (V, H', W')
+                # Interpolate to target resolution
+                duster_depth = F.interpolate(duster_depth[:, None], (h, w), mode='nearest')
+                duster_depths.append(duster_depth[:, 0, :, :, None])  # (V, H, W, 1)
+            depths = torch.stack(duster_depths, dim=1).numpy()  # (V, T, H, W, 1)
 
         # Frame subsampling: pick a random contiguous window of seq_len frames
         if self.seq_len is not None and self.seq_len < n_frames_total:
