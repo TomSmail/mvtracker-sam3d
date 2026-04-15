@@ -117,6 +117,7 @@ class MVTracker(nn.Module):
             pc_aug_alpha_depth: float = 15.0,
             pc_aug_alpha_feat: float = 5.0,
             pc_aug_min_confidence: float = 0.0,
+            pc_aug_replace_radius: float = 0.0,
     ):
         super().__init__()
 
@@ -140,6 +141,7 @@ class MVTracker(nn.Module):
         self.pc_aug_alpha_depth = pc_aug_alpha_depth
         self.pc_aug_alpha_feat = pc_aug_alpha_feat
         self.pc_aug_min_confidence = pc_aug_min_confidence
+        self.pc_aug_replace_radius = pc_aug_replace_radius
         if use_sam3d_knn_bias:
             self.sam3d_bias_lambda = nn.Parameter(torch.tensor(0.1))
             self.sam3d_bias_tau = nn.Parameter(torch.tensor(0.15))
@@ -354,6 +356,7 @@ class MVTracker(nn.Module):
                     alpha_depth=self.pc_aug_alpha_depth,
                     alpha_feat=self.pc_aug_alpha_feat,
                     min_confidence=self.pc_aug_min_confidence,
+                    replace_radius=self.pc_aug_replace_radius,
                 )
                 if pc_valid is not None:
                     pc_xyz, pc_fvec, pc_valid = augment_pointcloud_with_mesh_vertices(**augment_kwargs)

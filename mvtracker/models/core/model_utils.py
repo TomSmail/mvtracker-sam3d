@@ -497,6 +497,7 @@ def augment_pointcloud_with_mesh_vertices(
         alpha_depth: float = 15.0,
         alpha_feat: float = 5.0,
         min_confidence: float = 0.0,
+        replace_radius: float = 0.0,
 ) -> tuple:
     """
     Augment the depth-based point cloud with SAM3D mesh vertices.
@@ -504,6 +505,10 @@ def augment_pointcloud_with_mesh_vertices(
     Projects mesh vertices into each view's feature map, bilinearly samples features,
     and fuses across views using the specified fusion mode. Concatenates the result to
     the existing point cloud.
+
+    When replace_radius > 0, depth-based points within that radius of any mesh vertex
+    are removed before concatenation, making the mesh the primary geometry source for
+    human body regions.
 
     Args:
         pointcloud_xyz:  (B*S, V*H*W, 3)
@@ -520,6 +525,7 @@ def augment_pointcloud_with_mesh_vertices(
         alpha_depth:     sharpness for depth-consistency weighting
         alpha_feat:      sharpness for feature consensus weighting
         min_confidence:  filter vertices with max view weight below this threshold
+        replace_radius:  if > 0, remove depth points within this radius of any mesh vertex
 
     Returns:
         Augmented (pointcloud_xyz, pointcloud_fvec) and optionally pointcloud_valid.
@@ -663,7 +669,42 @@ def augment_pointcloud_with_mesh_vertices(
         # Keep all vertices but zero out features for low-confidence ones
         mesh_fvec = mesh_fvec * confident.unsqueeze(-1).float()
 
-    # Concatenate to existing point cloud
+    # Remove depth points near mesh vertices if replace_radius > 0
+    if replace_radius > 0.0:
+        # For each depth point, find distance to nearest mesh vertex
+        # pointcloud_xyz: (BS, N_depth, 3), mesh_vertices: (BS, M, 3)
+        # Process per batch element to manage memory (cdist on 57k x 500 is fine)
+        N_depth = pointcloud_xyz.shape[1]
+        keep_mask = torch.ones(BS, N_depth, device=device, dtype=torch.bool)
+        for b in range(BS):
+            # (N_depth, M) pairwise distances
+            dists = torch.cdist(pointcloud_xyz[b:b+1], mesh_vertices[b:b+1]).squeeze(0)  # (N_depth, M)
+            min_dist = dists.min(dim=1).values  # (N_depth,)
+            keep_mask[b] = min_dist > replace_radius
+
+        # Apply mask — use gather to keep only non-replaced points
+        # Since different batch elements may keep different numbers of points,
+        # pad to the max kept count
+        max_keep = keep_mask.sum(dim=1).max().item()
+        filtered_xyz = torch.zeros(BS, max_keep, 3, device=device, dtype=pointcloud_xyz.dtype)
+        filtered_fvec = torch.zeros(BS, max_keep, C, device=device, dtype=pointcloud_fvec.dtype)
+        if pointcloud_valid is not None:
+            filtered_valid = torch.zeros(BS, max_keep, device=device, dtype=pointcloud_valid.dtype)
+
+        for b in range(BS):
+            idx = keep_mask[b].nonzero(as_tuple=True)[0]
+            n_kept = idx.shape[0]
+            filtered_xyz[b, :n_kept] = pointcloud_xyz[b, idx]
+            filtered_fvec[b, :n_kept] = pointcloud_fvec[b, idx]
+            if pointcloud_valid is not None:
+                filtered_valid[b, :n_kept] = pointcloud_valid[b, idx]
+
+        pointcloud_xyz = filtered_xyz
+        pointcloud_fvec = filtered_fvec
+        if pointcloud_valid is not None:
+            pointcloud_valid = filtered_valid
+
+    # Concatenate mesh vertices to (possibly filtered) depth point cloud
     aug_xyz = torch.cat([pointcloud_xyz, mesh_vertices], dim=1)
     aug_fvec = torch.cat([pointcloud_fvec, mesh_fvec], dim=1)
 
