@@ -76,6 +76,11 @@ class PanopticHumanTrajectoryDataset(Dataset):
             use_cached_tracks = True
             non_parsed = non_parsed.replace("-cached", "", 1)
 
+        use_zero_depth = False
+        if non_parsed.startswith("-zerodepth"):
+            use_zero_depth = True
+            non_parsed = non_parsed.replace("-zerodepth", "", 1)
+
         assert non_parsed == "", f"Unparsed part of the dataset name: {non_parsed}"
 
         return PanopticHumanTrajectoryDataset(
@@ -86,6 +91,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
             seed=72,
             max_videos=6,
             use_cached_tracks=use_cached_tracks,
+            use_zero_depth=use_zero_depth,
             crop_size=None,
             seq_len=None,
         )
@@ -99,6 +105,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
         seed=None,
         max_videos=None,
         use_cached_tracks=False,
+        use_zero_depth=False,
         crop_size=None,
         seq_len=None,
     ):
@@ -109,6 +116,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
         self.traj_per_sample = traj_per_sample
         self.seed = seed
         self.use_cached_tracks = use_cached_tracks
+        self.use_zero_depth = use_zero_depth
         self.crop_size = crop_size  # (H, W) tuple or None
         self.seq_len = seq_len  # max frames to use, or None for all
         self.cache_name = self._cache_key()
@@ -242,7 +250,10 @@ class PanopticHumanTrajectoryDataset(Dataset):
                     raise RuntimeError(f"Failed to read image: {os.path.join(rgb_folder, f)}")
                 rgb_images.append(img[:, :, ::-1])
             depth_file = os.path.join(depths_path, f"depths_{v:02d}.npy")
-            depth = np.load(depth_file) if os.path.exists(depth_file) else None
+            if self.use_zero_depth:
+                depth = None  # Force zero depth for ablation study
+            else:
+                depth = np.load(depth_file) if os.path.exists(depth_file) else None
             views[v] = {"rgb": np.stack(rgb_images), "depth": depth}
 
         rgbs = np.stack([views[v]["rgb"] for v in views_to_return])

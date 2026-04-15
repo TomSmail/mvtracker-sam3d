@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human_eval_d3dgs_baseline
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_pointcloud_augmentation: false  # No SAM3D mesh, only Dynamic3DGS depth
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - panoptic-human-views1_7_14_20
+      - panoptic-human-views27_16_14_8
+      - panoptic-human-views1_4_7_11
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false
