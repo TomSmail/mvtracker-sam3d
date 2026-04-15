@@ -36,9 +36,9 @@ This thesis investigates two strategies for injecting SAM-3D-Body \cite{sam3dtea
 
 To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. We scale this pipeline to all 90 Panoptic Studio sequences, successfully generating tracks for 67 of them; the remaining 23 fail due to missing annotations, absent SAM3D predictions, or corrupt imagery. A cross-sequence quality audit over six representative sequences confirms reliable track completeness and coordinate consistency across the processed set.
 
-To address feature noise from occluded views, we adapt the entropy-weighted multi-view fusion principle from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} --- originally developed for generative 3D reconstruction --- to the tracking setting: mesh vertex features are weighted by depth-consistency and feature-consensus signals rather than averaged uniformly across views, requiring no additional learnable parameters.
+A zero-depth ablation study reveals that the pretrained MVTracker model is almost entirely dependent on depth-based geometry: when depth is removed, 3D Average Jaccard degrades from 55.6\% to 12.6\% (77\% relative drop). SAM3D mesh augmentation provides negligible improvement under both depth conditions: +0.5 points with near-perfect Dynamic 3D Gaussian Splatting depth (where the depth-based point cloud already covers the body) and +0.01 points with zero depth (where the pretrained model cannot effectively utilize mesh-based features). Dense mesh sampling (10$\times$ more vertices) and per-view feature preservation (avoiding multi-view averaging) both degrade performance further, confirming that the root issue is architectural incompatibility between mesh-based and depth-based feature distributions rather than feature quality or point density.
 
-Evaluation on three Panoptic Studio multi-view configurations shows that zero-shot point cloud augmentation improves 3D Average Jaccard by 3.72 points and within-10\,cm accuracy by 8.14 points on the most occluded view configuration, while leaving performance unchanged on configurations with denser depth coverage. Supervised finetuning consistently degrades performance due to catastrophic forgetting at the pretraining learning rate, identifying reduced learning rates and mixed-domain training as the key direction for future work.
+Supervised finetuning consistently degrades performance due to catastrophic forgetting at the pretraining learning rate. A critical methodological finding is that the TAPVid-3D benchmark sequences use Dynamic3DGS depths --- optimization-based reconstructions fitted to all 31 camera views --- as input, effectively providing ground-truth geometry and inflating evaluation results. Proper assessment of mesh augmentation requires evaluation with realistic, online-computable depth estimates such as DUSt3R.
 
 \clearpage
 
@@ -269,10 +269,16 @@ The finetuning setup for the point cloud augmentation model uses the following v
     \item Evaluation frequency: every 2,000 steps.
 \end{itemize}
 
-\section{Main Results}
-\label{sec:results}
+\section{Depth Source Analysis and Contamination}
+\label{sec:depth_contamination}
 
-Table~\ref{tab:main_results} reports the three primary comparisons on all three Panoptic view configurations. Higher AJ and $\delta^{0.10}$ are better; lower ATE is better.
+A critical finding emerged during evaluation: the six TAPVid-3D benchmark sequences (basketball, boxes, football, juggle, softball, tennis) use \textbf{Dynamic 3D Gaussian Splatting} \cite{luiten2023dynamic} depth maps as input. Dynamic3DGS is not a depth estimation method but rather a scene reconstruction technique that fits 3D Gaussians to \emph{all 31 camera views} of each sequence via multi-view optimization. The resulting depth maps are then rendered from the fitted Gaussian model.
+
+This creates a methodological issue: the depth maps used as input (X) are derived from the same multi-view imagery we are attempting to track (Y). Dynamic3DGS depths represent near-perfect geometry because they encode information from all views, effectively providing the tracker with ground-truth 3D structure. Evaluating with these depths inflates performance and obscures the true value of SAM3D mesh augmentation --- when the depth-based point cloud already covers human bodies accurately, there is little room for mesh vertices to contribute.
+
+\subsection{Zero-Depth Ablation Study}
+
+To quantify MVTracker's dependence on depth and isolate the contribution of SAM3D mesh augmentation, we conducted an ablation study comparing performance with and without depth on the same six sequences. Table~\ref{tab:ablation_results} reports results under two depth conditions (Dynamic3DGS and zero) crossed with two augmentation conditions (no SAM3D and with SAM3D mesh vertices).
 
 \begin{table}[htbp]
     \centering
@@ -280,23 +286,37 @@ Table~\ref{tab:main_results} reports the three primary comparisons on all three 
         \toprule
         & \multicolumn{3}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{3}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{3}{c}{\texttt{views1\_4\_7\_11}} \\
         \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
-        Model & AJ$\uparrow$ & $\delta^{0.10}\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & $\delta^{0.10}\uparrow$ & ATE$\downarrow$ & AJ$\uparrow$ & $\delta^{0.10}\uparrow$ & ATE$\downarrow$ \\
+        Configuration & AJ & $\delta^{0.10}$ & ATE & AJ & $\delta^{0.10}$ & ATE & AJ & $\delta^{0.10}$ & ATE \\
         \midrule
-        Baseline (depth only)          & 56.48 & 60.94 & 15.72 & 56.66 & 61.47 & 15.57 & 51.55 & 42.90 & 14.54 \\
-        PC-aug zero-shot               & 56.48 & 60.94 & 15.72 & 56.66 & 61.47 & 15.57 & \textbf{55.27} & \textbf{51.04} & \textbf{13.72} \\
-        PC-aug finetuned (20k steps)   & 30.21 & 20.11 & 25.32 & 32.07 & 21.19 & 23.47 & 20.77 & 12.49 & 123.46 \\
+        \multicolumn{10}{l}{\textit{With Dynamic3DGS depth (near-perfect)}} \\
+        \quad Baseline          & 55.29 & 59.62 & 16.39 & 56.67 & 61.39 & 16.12 & 54.92 & 50.98 & 14.18 \\
+        \quad + SAM3D mesh      & 56.48 & 60.94 & 15.72 & 56.66 & 61.47 & 15.57 & 55.27 & 51.04 & 13.72 \\
+        \midrule
+        \multicolumn{10}{l}{\textit{Without depth (zeros)}} \\
+        \quad Baseline          & 9.75 & 9.24 & 61.41 & 5.67 & 6.87 & 111.63 & 22.29 & 13.54 & 45.73 \\
+        \quad + SAM3D mesh      & 9.77 & 9.29 & 61.33 & 5.68 & 6.88 & 111.97 & 22.29 & 13.55 & 45.70 \\
         \bottomrule
     \end{tabularx}
-    \caption{Main results on Panoptic Studio human sequences. AJ = 3D Average Jaccard (\%), $\delta^{0.10}$ = fraction of tracks within 10\,cm (\%), ATE = Average Trajectory Error (mm). Bold entries indicate the best result per view configuration. PC-aug zero-shot uses the pretrained checkpoint with SAM3D vertices injected at inference; PC-aug finetuned additionally trains for 20k steps on all $\sim$55 valid Panoptic human sequences.}
-    \label{tab:main_results}
+    \caption{Ablation study comparing Dynamic3DGS depth vs zero depth with and without SAM3D mesh augmentation. Dynamic3DGS depths are near-perfect (trained on test scenes), while zero depth forces the model to rely solely on RGB features and camera geometry. All numbers are percentages except ATE (mm). Mesh augmentation provides minimal benefit with perfect depth (+0.5 AJ average) and no benefit without depth (+0.01 AJ average).}
+    \label{tab:ablation_results}
 \end{table}
 
 \section{Analysis}
 
-\subsection{Point Cloud Augmentation: Zero-Shot Effect}
-Table~\ref{tab:main_results} shows that PC-aug zero-shot --- applying SAM3D mesh vertex augmentation to the pretrained checkpoint without any finetuning --- produces a consistent improvement on \texttt{views1\_4\_7\_11} (+3.72 AJ, +8.14 $\delta^{0.10}$, $-$0.82 ATE) while leaving performance on the other two view configurations unchanged. This asymmetry is informative: \texttt{views1\_4\_7\_11} uses camera angles 1, 4, 7, and 11, which provide a more oblique and occluded coverage of the capture volume compared to the roughly symmetric layouts of the other two configurations. The mesh vertices appear to provide most benefit precisely in the view configurations where depth-based coverage is sparse from certain angles.
+\subsection{The Depth Dependency}
+Table~\ref{tab:ablation_results} reveals that MVTracker is \emph{almost entirely dependent} on depth-based geometry. When Dynamic3DGS depth is removed and replaced with zeros, average 3D Average Jaccard drops from 55.63 to 12.57 --- a 77\% relative degradation. Tracking error (ATE) increases from 15.5\,mm to 73.0\,mm on average, and within-10\,cm accuracy collapses from 58\% to 10\%. Without depth, the depth-based point cloud contains no points, leaving the kNN correlation search with no valid neighbours and no spatial evidence for the transformer to process.
 
-The zero-delta results on \texttt{views1\_7\_14\_20} and \texttt{views27\_16\_14\_8} indicate that the augmentation neither helps nor harms performance when the depth-based point cloud already provides adequate coverage. Adding ~500 mesh vertices per person to a 57k-point cloud does not change the correlation search outcome when the depth-based neighbours are already geometrically close to the tracked points.
+This dependence is expected: the pretrained MVTracker checkpoint was trained for 200k steps on Kubric synthetic data with ground-truth depth. The model has learned to rely on dense, view-specific 3D features sampled from depth-lifted CNN activations. RGB-only tracking (with camera poses but no depth) is a fundamentally different problem that would require training from scratch or extensive domain adaptation.
+
+\subsection{SAM3D Mesh Augmentation: Minimal Effect Under Both Conditions}
+SAM3D mesh vertex augmentation produces negligible improvements regardless of depth availability. With Dynamic3DGS depth, adding ~500 SMPL mesh vertices to the existing 57k-point depth cloud increases average AJ by only 0.5 points (from 55.63 to 56.14). The depth-based geometry already covers human bodies accurately, leaving little room for mesh vertices to contribute --- they represent less than 1\% of the total point cloud, so kNN queries ($k=16$) rarely select mesh vertices as neighbours.
+
+Without depth, mesh augmentation similarly provides no benefit: average AJ increases from 12.57 to 12.58 (+0.01 points). Although the mesh vertices now constitute a larger fraction of the (nearly empty) point cloud, their features are computed via multi-view projection and averaging, which produces ``blurred'' appearance descriptors that differ statistically from the view-specific depth-based features the pretrained transformer expects. Attempts to increase mesh density (5,000 vertices instead of 500) and preserve view-specific features (concatenating per-view mesh vertices without averaging) both degraded performance further, confirming that the pretrained model cannot effectively utilize mesh-based features without retraining.
+
+\subsection{The Role of Depth Quality: Dynamic3DGS vs DUSt3R}
+The evaluation protocol described above uses Dynamic3DGS depths, which are fitted to all 31 camera views via multi-view optimization and thus represent near-ground-truth geometry. This is appropriate for establishing an upper bound on performance but does not reflect realistic deployment scenarios where depth must be estimated online from the target views alone. The original MVTracker paper evaluates with DUSt3R --- a learning-based depth estimator that processes only the selected camera views --- to assess robustness to imperfect depth.
+
+To complete the assessment of SAM3D mesh augmentation, evaluation with DUSt3R depth is necessary. DUSt3R depths are noisier and sparser than Dynamic3DGS (gaps at object boundaries, lower confidence in textureless regions), which may create opportunities for mesh vertices to fill gaps and improve correlation quality. This evaluation is identified as immediate future work, with depth generation infrastructure already implemented.
 
 \subsection{Finetuning Analysis: Catastrophic Forgetting}
 Both finetuning runs --- 5,000 steps on four sequences and 20,000 steps on $\sim$55 valid sequences --- resulted in significantly degraded performance relative to the zero-shot baseline. On \texttt{views1\_4\_7\_11}, the 20k-step run degraded ATE from 14.54 to 123.46, an eightfold increase in trajectory error. Average AJ across all configurations dropped from 56.14 (zero-shot) to 27.68 (20k finetuned).
@@ -345,13 +365,17 @@ Qualitative inspection focuses on articulation-heavy motion and prolonged self-o
 
 % --- Chapter 6: Conclusion ---
 \chapter{Conclusion}
-This work integrates SAM-3D-Body human mesh priors into MVTracker via point cloud augmentation and a dedicated human data engine. Rather than modifying the correlation algorithm, augmentation directly addresses the root cause of tracking failures on human bodies: missing geometry in the depth-based point cloud. By concatenating SMPL mesh vertices with CNN features sampled via multi-view projection, the approach introduces dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead. Additionally, adapting the entropy-weighted fusion principle from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} to weight each view's feature contribution by depth consistency and feature consensus ensures that occluded views do not corrupt the fused vertex descriptors.
+This work investigates whether SAM-3D-Body human mesh priors can improve MVTracker's performance on human-centric scenes through point cloud augmentation. Rather than modifying the correlation algorithm, augmentation directly addresses the hypothesis that missing geometry in the depth-based point cloud is the root cause of tracking failures on human bodies. By concatenating SMPL mesh vertices with CNN features sampled via multi-view projection, the approach introduces dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead.
 
-An earlier attempt to improve tracking through kNN semantic bias --- re-ranking neighbour candidates by body-part proximity --- was evaluated and found to be ineffective. The analysis shows that low-capacity interventions on an incomplete point cloud cannot compensate for the absence of body-surface data, and motivates the shift to direct geometric augmentation.
+An earlier attempt to improve tracking through kNN semantic bias --- re-ranking neighbour candidates by body-part proximity --- was evaluated and found to be ineffective. The analysis shows that low-capacity interventions on an incomplete point cloud cannot compensate for the absence of body-surface data, motivating the shift to direct geometric augmentation.
 
-\textbf{Quantitative results.} Zero-shot point cloud augmentation improves AJ by 3.72 points and $\delta^{0.10}$ by 8.14 points on the \texttt{views1\_4\_7\_11} evaluation configuration, where oblique camera angles create sparser depth coverage. Performance on the two remaining configurations is unchanged, consistent with the interpretation that augmentation helps selectively where depth maps are inadequate. Both supervised finetuning attempts --- 5,000 steps on four sequences and 20,000 steps on $\sim$55 sequences --- produced catastrophic forgetting (average AJ falling from 56.14 to $\sim$28), attributable to the learning rate being identical to the pretraining schedule rather than the smaller rates appropriate for domain adaptation.
+\textbf{Primary findings.} A zero-depth ablation study reveals that the pretrained MVTracker model depends almost entirely on depth-based geometry: removing depth degrades 3D Average Jaccard from 55.6\% to 12.6\% (77\% relative drop). SAM3D mesh augmentation provides negligible improvement under both depth conditions: +0.5 points average with near-perfect Dynamic3DGS depth (where the existing depth cloud already covers the body accurately), and +0.01 points with zero depth (where the pretrained model cannot effectively utilize mesh-based features without retraining). Dense mesh sampling and per-view feature preservation both degrade performance further, confirming that the issue is architectural incompatibility between mesh-based and depth-based feature distributions rather than point density or feature averaging artifacts.
 
-\textbf{Limitations and future work.} The approach depends on reliable SAM3D detections; 12 of 67 processed sequences contained no people (empty-room recordings) and contributed no useful data. Supervised finetuning at an appropriate learning rate ($\sim 5 \times 10^{-6}$), with partial encoder freezing or mixed-domain training to prevent catastrophic forgetting, is the most promising next step. Additional directions include vertex subsampling strategies to reduce cloud overhead, extension to non-human articulated objects, and evaluation on broader real-world capture domains beyond Panoptic Studio.
+\textbf{Methodological contribution.} A critical discovery is that the TAPVid-3D benchmark sequences use Dynamic 3D Gaussian Splatting depths as input --- optimization-based reconstructions fitted to all 31 camera views --- which represent near-ground-truth geometry rather than online-computable depth estimates. This inflates baseline performance and obscures the potential value of geometric priors. Proper evaluation of mesh augmentation requires assessment with realistic depth sources such as DUSt3R, which estimates depth from the target views alone without access to the full multi-view capture.
+
+\textbf{Finetuning analysis.} Both supervised finetuning attempts --- 5,000 steps on four sequences and 20,000 steps on $\sim$55 sequences --- produced catastrophic forgetting (average AJ falling from 56.14 to $\sim$28), attributable to the learning rate ($5 \times 10^{-4}$) being identical to the pretraining schedule rather than the smaller rates ($\sim 5 \times 10^{-6}$) appropriate for domain adaptation.
+
+\textbf{Limitations and future work.} The zero-shot augmentation approach depends on the pretrained model's capacity to utilize mesh-based features, which the current MVTracker architecture lacks. Training a model from scratch to fuse depth-based and mesh-based correlation evidence, or designing a depth-agnostic tracking architecture that operates on RGB and parametric body models alone, represent promising directions. For the pretrained-model setting, evaluation with DUSt3R depth (pending) will clarify whether mesh augmentation provides value when depth quality is intermediate between Dynamic3DGS (perfect) and zeros (absent). Additional directions include extension to non-human articulated objects and evaluation on broader real-world capture domains beyond Panoptic Studio.
 
 \bibliographystyle{plain}
 \bibliography{cite}
