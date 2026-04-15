@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human_eval_zerodepth_perview_sparse
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_pointcloud_augmentation: true
+  pc_aug_per_view_features: true  # Per-view features (no averaging)
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - panoptic-human-views1_7_14_20-zerodepth
+      - panoptic-human-views27_16_14_8-zerodepth
+      - panoptic-human-views1_4_7_11-zerodepth
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false

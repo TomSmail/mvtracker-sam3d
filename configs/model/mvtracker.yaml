@@ -29,6 +29,7 @@ model:
   pc_aug_alpha_feat: 5.0                   # sharpness for feature consensus weighting
   pc_aug_min_confidence: 0.0               # filter vertices with max weight below this
   pc_aug_replace_radius: 0.0               # if > 0, remove depth points within this radius of mesh vertices
+  pc_aug_per_view_features: false          # if true, use per-view features (no averaging)
 
 evaluation:
   interp_shape: [ 384, 512 ]

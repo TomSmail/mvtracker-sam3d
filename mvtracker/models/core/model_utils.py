@@ -716,6 +716,105 @@ def augment_pointcloud_with_mesh_vertices(
     return aug_xyz, aug_fvec
 
 
+def augment_pointcloud_with_mesh_vertices_per_view(
+        pointcloud_xyz: torch.Tensor,
+        pointcloud_fvec: torch.Tensor,
+        mesh_vertices: torch.Tensor,
+        fmaps: torch.Tensor,
+        intrs: torch.Tensor,
+        extrs: torch.Tensor,
+        stride: int,
+        level: int = 0,
+        pointcloud_valid: Optional[torch.Tensor] = None,
+) -> tuple:
+    """
+    Augment point cloud with mesh vertices using per-view features (NO averaging).
+
+    Each mesh vertex visible in V views is added V times — once per view with that
+    view's specific CNN features. This preserves view-dependent appearance instead
+    of averaging it away.
+
+    Args:
+        Same as augment_pointcloud_with_mesh_vertices
+
+    Returns:
+        Augmented (pointcloud_xyz, pointcloud_fvec) and optionally pointcloud_valid.
+        Output shape: (B*S, V*H*W + V*M, 3/C) where invalid vertices are zeroed.
+    """
+    B, V, S, C, H_orig, W_orig = fmaps.shape
+
+    # Pool fmaps to the correct pyramid level
+    if level > 0:
+        fmaps_flat = fmaps.reshape(B * V * S, C, H_orig, W_orig)
+        for _ in range(level):
+            fmaps_flat = F.avg_pool2d(fmaps_flat, 2, stride=2)
+        H = H_orig // 2 ** level
+        W = W_orig // 2 ** level
+        fmaps = fmaps_flat.reshape(B, V, S, C, H, W)
+    else:
+        H, W = H_orig, W_orig
+
+    effective_stride = stride * 2 ** level
+    BS = B * S
+    M = mesh_vertices.shape[1]
+    device = mesh_vertices.device
+
+    # Build per-view mesh clouds
+    mesh_xyz_list = []
+    mesh_fvec_list = []
+    mesh_valid_list = []
+
+    for v in range(V):
+        # Get per-frame intrinsics and extrinsics
+        intrs_v_flat = intrs[:, v].reshape(BS, 3, 3)
+        extrs_v_flat = extrs[:, v].reshape(BS, 3, 4)
+
+        # Project mesh to this view
+        world_homo = torch.cat([mesh_vertices, mesh_vertices.new_ones(BS, M, 1)], dim=-1)
+        cam_xyz = torch.einsum('bij,bmj->bmi', extrs_v_flat, world_homo)
+        cam_z = cam_xyz[..., 2:3]
+        pixel_homo = torch.einsum('bij,bmj->bmi', intrs_v_flat, cam_xyz)
+        pixel_xy = pixel_homo[..., :2] / (pixel_homo[..., 2:3] + 1e-8)
+
+        # Visibility check
+        px = pixel_xy[..., 0]
+        py = pixel_xy[..., 1]
+        H_px = H * effective_stride
+        W_px = W * effective_stride
+        visible = (cam_z[..., 0] > 0) & (px >= 0) & (px < W_px) & (py >= 0) & (py < H_px)
+
+        # Sample features from THIS view only
+        feat_x = pixel_xy[..., 0] / effective_stride
+        feat_y = pixel_xy[..., 1] / effective_stride
+        fmap_v = fmaps[:, v].reshape(BS, C, H, W)
+        sampled = bilinear_sample2d(fmap_v, feat_x, feat_y)
+        sampled = sampled.permute(0, 2, 1)  # (BS, M, C)
+
+        # Zero out invisible vertices (will be filtered by valid mask)
+        vis_mask = visible.unsqueeze(-1).float()  # (BS, M, 1)
+        mesh_xyz_v = mesh_vertices * vis_mask
+        mesh_fvec_v = sampled * vis_mask
+
+        mesh_xyz_list.append(mesh_xyz_v)
+        mesh_fvec_list.append(mesh_fvec_v)
+        mesh_valid_list.append(visible)
+
+    # Stack across views: (V, BS, M, 3/C) → (BS, V, M, 3/C) → (BS, V*M, 3/C)
+    mesh_xyz_all = torch.stack(mesh_xyz_list, dim=1).reshape(BS, V * M, 3)
+    mesh_fvec_all = torch.stack(mesh_fvec_list, dim=1).reshape(BS, V * M, C)
+
+    # Concatenate to depth cloud
+    aug_xyz = torch.cat([pointcloud_xyz, mesh_xyz_all], dim=1)
+    aug_fvec = torch.cat([pointcloud_fvec, mesh_fvec_all], dim=1)
+
+    if pointcloud_valid is not None:
+        mesh_valid_all = torch.stack(mesh_valid_list, dim=1).reshape(BS, V * M)
+        aug_valid = torch.cat([pointcloud_valid, mesh_valid_all], dim=1)
+        return aug_xyz, aug_fvec, aug_valid
+
+    return aug_xyz, aug_fvec
+
+
 def save_pointcloud_to_ply(filename, points, colors, edges=None):
     with open(filename, 'w') as ply_file:
         ply_file.write("ply\nformat ascii 1.0\n")
