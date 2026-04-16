@@ -32,10 +32,11 @@ fi
 
 nvidia-smi
 
-# Create symlink for panoptic_d3dgs (script expects this path)
-mkdir -p $DIR/datasets
-if [ ! -L "$DIR/datasets/panoptic_d3dgs" ]; then
-    ln -sf /cluster/scratch/tsmail/datasets/panoptic-multiview $DIR/datasets/panoptic_d3dgs
+# datasets/panoptic_d3dgs should already contain symlinks to the 6 TAPVid-3D sequences
+# (set up by: mkdir panoptic_d3dgs && ln -sf panoptic-multiview/{seq} panoptic_d3dgs/{seq})
+if [ ! -d "$DIR/datasets/panoptic_d3dgs" ]; then
+    echo "ERROR: datasets/panoptic_d3dgs not set up. Create symlinks to the 6 TAPVid-3D sequences."
+    exit 1
 fi
 
 # Set PYTHONPATH to include DUSt3R
