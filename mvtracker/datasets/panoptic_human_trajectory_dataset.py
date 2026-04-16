@@ -280,7 +280,7 @@ class PanopticHumanTrajectoryDataset(Dataset):
         # Optionally replace with DUSt3R depths
         if self.use_duster_depths:
             import pathlib
-            views_str = "_".join(map(str, views_to_return))
+            views_str = "-".join(map(str, views_to_return))
             duster_root = pathlib.Path(datapoint_path) / f'duster-views-{views_str}'
             if not duster_root.exists():
                 raise FileNotFoundError(f"DUSt3R root {duster_root} does not exist. Run estimate_depth_with_duster.py first.")
