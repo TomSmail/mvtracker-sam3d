@@ -6,7 +6,7 @@
 #SBATCH --mem-per-cpu=8G
 #SBATCH --gpus=1
 #SBATCH --gres=gpumem:80g
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=./logs/slurm_logs/%x-%j.out
 
 # Finetuning with frozen encoder + mixed Kubric/Panoptic(DUSt3R) data
