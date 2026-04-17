@@ -42,6 +42,7 @@ trainer:
   precision: 16-mixed               # training precision (e.g., 16-mixed, bf16-mixed or 32-true)
   visibility_loss_weight: 0.1
 
+  freeze_encoder: false              # freeze BasicEncoder CNN during finetuning
   augment_train_iters: false
   augment_train_iters_warmup: 2000
 

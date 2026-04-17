@@ -55,7 +55,8 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 def fetch_optimizer(trainer_cfg, model):
     """Create the optimizer and learning rate scheduler"""
-    optimizer = optim.AdamW(model.parameters(), lr=trainer_cfg.lr, weight_decay=trainer_cfg.wdecay)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.AdamW(trainable_params, lr=trainer_cfg.lr, weight_decay=trainer_cfg.wdecay)
     if trainer_cfg.anneal_strategy in ["linear", "cos"]:
         scheduler = optim.lr_scheduler.OneCycleLR(
             optimizer,
@@ -589,6 +590,28 @@ def main(cfg: DictConfig):
         # Mix datasets (natural ratio favors Kubric due to size difference)
         train_dataset = torch.utils.data.ConcatDataset([kubric_dataset, panoptic_dataset])
         logging.info(f"Mixed dataset: {len(kubric_dataset)} Kubric + {len(panoptic_dataset)} Panoptic = {len(train_dataset)} total")
+    elif cfg.datasets.train.name == "mixed-kubric-panoptic-human-duster":
+        # Mixed training with DUSt3R depths for Panoptic (honest, non-contaminated depth)
+        logging.info("Creating mixed dataset (Kubric + Panoptic human with DUSt3R depths)")
+
+        kubric_dataset = KubricMultiViewDataset.from_name(
+            "kubric-multiview-v3-training", cfg.datasets.root, cfg, fabric
+        )
+
+        panoptic_dataset = PanopticHumanTrajectoryDataset(
+            data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
+            views_to_return=[1, 7, 14, 20],
+            traj_per_sample=cfg.datasets.train.traj_per_sample,
+            seed=None,
+            max_videos=4,  # basketball, boxes, football, juggle
+            use_cached_tracks=False,
+            use_duster_depths=True,
+            crop_size=cfg.augmentations.get("cropping_size", [384, 512]),
+            seq_len=cfg.datasets.train.get("sequence_len", 24),
+        )
+
+        train_dataset = torch.utils.data.ConcatDataset([kubric_dataset, panoptic_dataset])
+        logging.info(f"Mixed dataset (DUSt3R): {len(kubric_dataset)} Kubric + {len(panoptic_dataset)} Panoptic = {len(train_dataset)} total")
     else:
         raise ValueError(f"Dataset {cfg.datasets.train.name} not supported for training")
 
@@ -619,6 +642,15 @@ def main(cfg: DictConfig):
 
     model: nn.Module = hydra.utils.instantiate(cfg.model)
     model.cuda()
+
+    # Optionally freeze the CNN encoder to prevent catastrophic forgetting during finetuning
+    if cfg.trainer.get("freeze_encoder", False):
+        for p in model.fnet.parameters():
+            p.requires_grad = False
+        frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logging.info(f"Frozen encoder: {frozen:,} params frozen, {trainable:,} params trainable")
+
     optimizer, scheduler = fetch_optimizer(cfg.trainer, model)
     model, optimizer = fabric.setup(model, optimizer)
 
