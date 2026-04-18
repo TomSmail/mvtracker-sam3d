@@ -1,11 +1,11 @@
 # @package _global_
-# Finetuning with frozen encoder, DUSt3R depths, and mixed Kubric+Panoptic data.
+# Finetuning with frozen encoder and DUSt3R depths on Panoptic human data.
 # Addresses catastrophic forgetting from previous runs (lr=5e-4 → AJ 56→28, lr=5e-5 → AJ 56→45).
-# Key changes: freeze BasicEncoder, use DUSt3R depths (not D3DGS), mix with Kubric for replay.
+# Key changes: freeze BasicEncoder, use DUSt3R depths (not D3DGS), lr=1e-5.
 defaults:
   - override /model: mvtracker
 
-experiment_path: ./logs/mvtracker_human_finetune_duster_mixed
+experiment_path: ./logs/mvtracker_human_finetune_duster_frozen
 restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
 
 model:
@@ -14,11 +14,12 @@ model:
 datasets:
   root: ./datasets
   train:
-    name: mixed-kubric-panoptic-human-duster
+    name: panoptic-human-training-duster
     batch_size: 1
     sequence_len: 24
     traj_per_sample: 384
     num_workers: 8
+    max_videos: 4         # basketball, boxes, football, juggle (hold out softball, tennis)
   eval:
     names:
       - panoptic-human-views1_7_14_20-duster

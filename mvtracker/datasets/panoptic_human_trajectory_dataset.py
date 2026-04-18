@@ -181,6 +181,13 @@ class PanopticHumanTrajectoryDataset(Dataset):
                         continue
             except Exception:
                 pass
+            # If using DUSt3R depths, skip sequences that don't have them generated
+            if self.use_duster_depths and self.views_to_return is not None:
+                views_str = "-".join(map(str, self.views_to_return))
+                duster_dir = os.path.join(scene_path, f"duster-views-{views_str}")
+                if not os.path.isdir(duster_dir):
+                    warnings.warn(f"Skipping {seq_name}: no DUSt3R depths at {duster_dir}")
+                    continue
             valid_seqs.append(seq_name)
 
         if max_videos is not None:

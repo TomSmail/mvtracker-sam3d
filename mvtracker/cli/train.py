@@ -568,6 +568,23 @@ def main(cfg: DictConfig):
             seq_len=cfg.datasets.train.get("sequence_len", 24),
         )
         logging.info(f"Panoptic human training dataset: {len(train_dataset)} samples")
+    elif cfg.datasets.train.name == "panoptic-human-training-duster":
+        # Panoptic human training with DUSt3R depths (honest, non-contaminated)
+        max_train_videos = cfg.datasets.train.get("max_videos", 4)
+        logging.info(f"Creating Panoptic human training dataset with DUSt3R depths (max_videos={max_train_videos})")
+
+        train_dataset = PanopticHumanTrajectoryDataset(
+            data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
+            views_to_return=[1, 7, 14, 20],
+            traj_per_sample=cfg.datasets.train.traj_per_sample,
+            seed=None,
+            max_videos=max_train_videos,
+            use_cached_tracks=False,
+            use_duster_depths=True,
+            crop_size=cfg.augmentations.get("cropping_size", [384, 512]),
+            seq_len=cfg.datasets.train.get("sequence_len", 24),
+        )
+        logging.info(f"Panoptic human training dataset (DUSt3R): {len(train_dataset)} samples")
     elif cfg.datasets.train.name == "mixed-kubric-panoptic-human":
         # Mixed training: 80% Kubric synthetic + 20% Panoptic human tracks
         logging.info("Creating mixed training dataset (Kubric + Panoptic human tracks)")
