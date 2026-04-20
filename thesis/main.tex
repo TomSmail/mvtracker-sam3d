@@ -192,6 +192,15 @@ with $\alpha_f = 5.0$. The final weight combines both signals: $w(v) = w_{\text{
 
 Since all weights are derived from geometry and feature statistics (no learnable parameters), the depth-weighted fusion operates zero-shot with the pretrained MVTracker checkpoint, avoiding the catastrophic forgetting observed during finetuning.
 
+Figure~\ref{fig:depth_weighted_fusion} illustrates the depth-weighted fusion mechanism. Each mesh vertex is projected into all camera views; depth consistency is checked by comparing the vertex's projected depth ($z_{\text{proj}}$) against the depth map value ($z_{\text{map}}$) at the projected pixel location. Views where the vertex is occluded (large depth mismatch) receive near-zero weight, while visible views dominate the final feature aggregation. In the example shown, Views 1 and 7 contribute equally (visible, weights $\sim$0.46--0.48), View 14 is suppressed (occluded, weight $\sim$0.00), and View 20 contributes minimally (partial occlusion, weight $\sim$0.06).
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/depth_weighted_fusion_diagram.pdf}
+    \caption{Depth-weighted multi-view fusion for mesh vertex features. A mesh vertex (magenta) is projected into 4 camera views. For each view, the projected depth $z_{\text{proj}}$ (vertex distance to camera) is compared against the depth map value $z_{\text{map}}$ sampled at the projected pixel. Depth consistency determines per-view weight: visible views (green, $z_{\text{map}} \approx z_{\text{proj}}$) receive high weight, occluded views (red, $z_{\text{map}} \ll z_{\text{proj}}$) receive near-zero weight. The final 128-d feature vector is the weighted mean across views, ensuring occluded projections do not corrupt the mesh vertex descriptor. Color intensity and arrow thickness indicate weight magnitude.}
+    \label{fig:depth_weighted_fusion}
+\end{figure}
+
 \subsection{Backward Compatibility}
 The forward pass accepts an optional tensor \texttt{sam3d\_vertices\_world} of shape $(B, T, n_{\text{persons}}, V, 3)$, where $V \approx 6890$. When this tensor is absent, the augmentation step is skipped and the model behaves identically to the baseline MVTracker. The fusion mode is configurable: \texttt{mean} reproduces the original uniform averaging, \texttt{depth\_weighted} enables depth-consistency weighting, and \texttt{consensus} adds the two-pass feature consensus refinement. The kNN bias code (Section~\ref{sec:knn_bias}) remains in the codebase and can be combined with augmentation, but the primary experiments evaluate augmentation alone.
 
