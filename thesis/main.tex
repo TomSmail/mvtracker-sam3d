@@ -30,15 +30,15 @@
 \chapter*{Abstract}
 \addcontentsline{toc}{chapter}{Abstract}
 
-Tracking arbitrary 3D points through time is a core capability for scene understanding, robotic manipulation, and motion analysis. Multi-view RGBD systems such as MVTracker \cite{rajic2025multiview3dpointtracking} achieve strong results on generic scenes, but struggle on human-centric sequences: self-occlusion, articulated non-rigid motion, and depth sensor noise over clothed surfaces leave the depth-based point cloud --- MVTracker's sole source of correlation evidence --- sparse or empty over body regions.
+Tracking arbitrary 3D points through time is fundamental to scene understanding, robotic manipulation, and motion analysis. Multi-view RGBD systems such as MVTracker \cite{rajic2025multiview3dpointtracking} achieve strong performance on generic scenes but struggle on human-centric sequences: self-occlusion, articulated non-rigid motion, and depth sensor noise over clothed surfaces leave the depth-based point cloud --- MVTracker's sole source of correlation evidence --- sparse or empty over body regions.
 
-This thesis investigates two strategies for injecting SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} human mesh priors into MVTracker. The first, kNN semantic bias, re-ranks neighbour candidates using body-part proximity scores derived from MHR-70 joints. This approach produced no measurable improvement, revealing that re-ranking a sparse or absent neighbour set cannot compensate for missing geometry. The second, point cloud augmentation, directly inserts SMPL \cite{loper2015smpl} mesh vertices into the depth-based point cloud with CNN features sampled via multi-view projection. This adds dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead (approximately 12\% increase in cloud size).
+This thesis investigates whether augmenting MVTracker's point cloud with parametric human mesh priors can improve tracking robustness on human bodies. We directly insert SMPL \cite{loper2015smpl} mesh vertices from SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} into the depth-based point cloud, providing dense geometric coverage where depth is unreliable. Each mesh vertex receives a 128-dimensional feature descriptor computed via depth-weighted multi-view projection from CNN activations, requiring no new learnable parameters. To support evaluation, we build a modified AnthroTAP-style data engine that generates dense 3D trajectory supervision from multi-view SAM3D fits on 41 Panoptic Studio sequences, cross-validated against original TAPVid-3D annotations for geometric consistency.
 
-To support training and evaluation, we build a human-centric data engine that converts per-view SAM3D fits on Panoptic Studio \cite{joo2015panoptic} sequences into MVTracker-compatible dense trajectory supervision with explicit multi-view visibility modelling. We scale this pipeline to all 90 Panoptic Studio sequences, successfully generating tracks for 67 of them; the remaining 23 fail due to missing annotations, absent SAM3D predictions, or corrupt imagery. A cross-sequence quality audit over six representative sequences confirms reliable track completeness and coordinate consistency across the processed set.
+A zero-depth ablation study reveals that the pretrained MVTracker model depends almost entirely on depth-based geometry: removing depth degrades 3D Average Jaccard from 55.6\% to 12.6\% (77\% relative degradation). With near-perfect Dynamic 3D Gaussian Splatting depth --- where the depth-based point cloud already covers human bodies accurately --- SAM3D mesh augmentation provides only marginal benefit (+0.5 AJ points). With zero depth, where mesh vertices dominate the point cloud, augmentation similarly fails (+0.01 AJ points), indicating that the pretrained transformer cannot productively incorporate mesh-based features without retraining.
 
-A zero-depth ablation study reveals that the pretrained MVTracker model is almost entirely dependent on depth-based geometry: when depth is removed, 3D Average Jaccard degrades from 55.6\% to 12.6\% (77\% relative drop). SAM3D mesh augmentation provides negligible improvement under both depth conditions: +0.5 points with near-perfect Dynamic 3D Gaussian Splatting depth (where the depth-based point cloud already covers the body) and +0.01 points with zero depth (where the pretrained model cannot effectively utilize mesh-based features). Dense mesh sampling (10$\times$ more vertices) and per-view feature preservation (avoiding multi-view averaging) both degrade performance further, confirming that the root issue is architectural incompatibility between mesh-based and depth-based feature distributions rather than feature quality or point density.
+A critical methodological finding is that the TAPVid-3D benchmark uses Dynamic3DGS depths as input: multi-view optimization reconstructions fitted to all 31 cameras, effectively providing ground-truth geometry. This inflates baseline performance by $6\times$ (AJ 55.6\% $\to$ 9.1\%) when compared to DUSt3R-estimated depths that are online-computable from 4 target views. Under these realistic depth conditions, feature fusion strategy matters: uniform mean fusion degrades performance ($-$1.1 AJ), but depth-weighted fusion --- which down-weights features from occluded views using depth consistency --- improves AJ by 1.7 points and reduces trajectory error by 20\,mm on narrow-baseline camera configurations where DUSt3R depth is least reliable. Three supervised finetuning attempts at progressively lower learning rates all produced catastrophic forgetting, indicating data scarcity (only 4--6 sequences with realistic depth) as the fundamental bottleneck rather than hyperparameter mis-tuning.
 
-Supervised finetuning consistently degrades performance due to catastrophic forgetting at the pretraining learning rate. A critical methodological finding is that the TAPVid-3D benchmark sequences use Dynamic3DGS depths --- optimization-based reconstructions fitted to all 31 camera views --- as input, effectively providing ground-truth geometry and inflating evaluation results. Evaluation with DUSt3R-estimated depths (online-computable from 4 target views) confirms the inflation: average AJ drops from 55.6\% to 9.1\%. Under these realistic depth conditions, the choice of feature fusion strategy matters: uniform mean fusion degrades AJ by 1.1 points, but depth-weighted fusion improves AJ by 1.7 points and reduces trajectory error by 20\,mm on narrow-baseline configurations where DUSt3R depth is least reliable. This demonstrates that mesh augmentation can provide value when feature quality is conditioned on depth consistency.
+The primary contribution is the demonstration that depth-weighted feature fusion enables mesh augmentation to provide targeted value under realistic depth conditions, alongside the discovery of benchmark depth contamination and a validated data generation pipeline for human-centric tracking research.
 
 \clearpage
 
@@ -51,11 +51,28 @@ Supervised finetuning consistently degrades performance due to catastrophic forg
 % --- Chapter 1: Introduction ---
 \chapter{Introduction}
 \label{ch:intro}
-Human-centric 3D point tracking is a particularly challenging variant of general point tracking due to severe self-occlusion, articulated non-rigid motion, and persistent appearance ambiguity across body parts. While the MVTracker framework \cite{rajic2025multiview3dpointtracking} already leverages multi-view and temporal context, its correlation evidence is derived entirely from depth-based point clouds, which are often incomplete or noisy over human bodies due to reflective clothing, thin limbs, and sensor limitations.
 
-This thesis investigates whether directly enriching the 3D point cloud with human mesh geometry can improve track consistency and robustness under these conditions. We integrate SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} outputs into MVTracker by augmenting the depth-based point cloud with SMPL mesh vertices, providing explicit geometric coverage of the human body surface where depth maps are unreliable. We also build a dedicated human data engine that provides dense trajectory supervision from Panoptic Studio sequences.
+\section{Motivation}
+Human-centric 3D point tracking is a particularly challenging variant of general point tracking. The human body undergoes severe self-occlusion (arms crossing torso, legs passing in front of each other), articulated non-rigid motion that violates rigidity assumptions, and appearance ambiguity across anatomically similar regions (left vs right limbs, uniform-colored clothing). Depth sensors further complicate the problem: reflective or textured fabric, thin extremities, and systematic occlusion produce sparse, noisy depth maps over body regions.
 
-The key contributions are fourfold. First, we implement and evaluate a kNN semantic bias approach that re-ranks neighbour candidates by body-part proximity; this approach did not produce measurable improvement, and its failure motivates a more direct intervention. Second, we introduce a point cloud augmentation strategy that inserts SAM3D mesh vertices directly into the depth-based point cloud (with CNN features sampled via multi-view projection), requiring zero new learnable parameters. Third, we adapt the entropy-weighted multi-view fusion principle from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion} to weight each view's feature contribution by depth consistency and feature consensus, ensuring that occluded or unreliable views do not corrupt mesh vertex descriptors. Fourth, we design and validate a human-centric trajectory generation pipeline that converts multi-view SAM3D fits into MVTracker-compatible supervision with explicit visibility modelling.
+MVTracker \cite{rajic2025multiview3dpointtracking} is a state-of-the-art multi-view 3D point tracker that addresses general scenes by lifting 2D CNN features into 3D via depth and performing correlation-based matching in world space. For each query point, MVTracker searches for the $k=16$ nearest neighbours in a depth-based point cloud (back-projected from all camera views) and computes local correlation features that feed a transformer. This architecture is effective when depth is reliable, but struggles on human bodies where depth is systematically unreliable: a hole in the depth map directly produces a hole in the point cloud, leaving the kNN search with no valid candidates in that region.
+
+Parametric human body models such as SMPL \cite{loper2015smpl} provide an alternative geometric representation. Given pose and shape parameters, SMPL deterministically produces a triangulated mesh of 6,890 vertices that covers the entire body surface. Recent monocular human mesh recovery systems --- notably SAM-3D-Body \cite{sam3dteam2025sam3d3dfyimages} --- can fit SMPL to image crops in real-time, recovering both a compact kinematic skeleton (70 MHR joints) and the full body mesh. These mesh vertices exist even where depth fails, making them a natural candidate for filling gaps in the point cloud.
+
+\section{Contributions}
+This thesis investigates whether enriching MVTracker's point cloud with SAM3D mesh geometry can improve tracking robustness on human bodies. The key contributions are:
+
+\begin{enumerate}
+    \item \textbf{Point cloud augmentation with depth-weighted fusion.} We concatenate SMPL mesh vertices into the depth-based point cloud, computing 128-dimensional feature descriptors via multi-view projection from CNN activations. Features are weighted by depth consistency (down-weighting occluded views) using a zero-parameter geometric confidence signal adapted from MV-SAM3D \cite{li2026mvsam3dadaptivemultiviewfusion}. This provides dense body-surface coverage where depth is unreliable without requiring new learnable parameters or architectural changes.
+
+    \item \textbf{Discovery of benchmark depth contamination.} We identify that the TAPVid-3D Panoptic sequences use Dynamic 3D Gaussian Splatting depths --- optimization-based reconstructions fitted to all 31 camera views --- as input, inflating baseline performance by $6\times$ (AJ 55.6\% vs 9.1\%) relative to online-computable DUSt3R depth estimates. This finding motivates re-evaluation under realistic depth conditions.
+
+    \item \textbf{Validated human-centric data engine.} We implement a modified AnthroTAP-style pipeline that converts per-view SAM3D fits into dense multi-view trajectory supervision, scaling to 41 complete Panoptic sequences. Cross-validation against TAPVid-3D confirms geometric consistency (zero reprojection error, identical camera parameters), temporal smoothness (median velocity 0.02 units/frame), and robust multi-view coverage (19.5/31 cameras per track).
+
+    \item \textbf{Systematic ablation across three depth regimes.} We evaluate point cloud augmentation with perfect depth (Dynamic3DGS), estimated depth (DUSt3R), and absent depth (zeros), revealing that depth-weighted fusion improves tracking accuracy by 1.7 AJ points on narrow-baseline configurations where DUSt3R depth is least reliable, while consensus and replacement strategies provide no additional benefit.
+\end{enumerate}
+
+An earlier kNN semantic bias approach --- re-ranking neighbour candidates by body-part proximity using two learnable scalars --- produced no measurable improvement, motivating the shift to direct geometric augmentation.
 
 % --- Chapter 2: Background & Related Work ---
 \chapter{Background}
@@ -132,40 +149,9 @@ Although MV-SAM3D operates in a generative diffusion setting rather than point t
 \section{Overview}
 The central challenge in applying MVTracker to human-centric scenes is that the depth-based point cloud --- the sole source of correlation evidence --- is frequently incomplete over human bodies. Reflective or textured clothing, thin limbs, and self-occlusion all produce holes and noise in the depth map, leaving the kNN correlation search without valid candidates near the tracked body surface.
 
-We investigate two strategies for injecting SAM-3D-Body priors into MVTracker. The first, kNN semantic bias, attempts to improve neighbour selection within the existing point cloud by re-ranking candidates based on body-part proximity. The second, point cloud augmentation, directly addresses the data gap by adding SMPL mesh vertices as additional points in the point cloud. Both strategies preserve full backward compatibility with the baseline MVTracker architecture.
+This chapter presents point cloud augmentation as the primary technical contribution: directly inserting SMPL mesh vertices from SAM3D into the depth-based point cloud (Section~\ref{sec:pc_aug}), providing dense geometric coverage where depth is unreliable. Section~\ref{sec:knn_bias} describes an earlier kNN semantic bias approach that was evaluated and found ineffective, motivating the shift to direct geometric augmentation. Both strategies preserve full backward compatibility with the baseline MVTracker architecture.
 
-\section{Approach 1: kNN Semantic Bias}
-\label{sec:knn_bias}
-
-\subsection{Mechanism}
-Rather than changing the point cloud, the kNN bias approach re-ranks the neighbour candidates used for correlation. For each query point, instead of fetching $k=16$ nearest neighbours in Euclidean space, we over-fetch $k' = 4k = 64$ candidates and then re-rank them using a combined spatial-semantic distance.
-
-For each candidate, a soft body-part assignment is computed based on its distance to the 70 MHR joints provided by SAM3D:
-\begin{equation}
-    \mathbf{w} = \operatorname{softmax}\left( -\frac{\mathbf{d}_{\text{joint}}}{\tau} \right),
-\end{equation}
-where $\tau$ is a learnable temperature parameter (initialised to 0.15). The semantic distance between a query point $q$ and a candidate $c$ is then
-\begin{equation}
-    d_{\text{sem}} = \lVert \mathbf{w}_{q} - \mathbf{w}_{c} \rVert_2,
-\end{equation}
-and the combined ranking criterion is
-\begin{equation}
-    d_{\text{adj}} = d_{\text{spatial}} + |\lambda|\, d_{\text{sem}},
-\end{equation}
-where $\lambda$ is a learnable strength parameter (initialised to 0.1). Top-$k$ selection is performed on $d_{\text{adj}}$. To provide a differentiable gradient path to $\lambda$ and $\tau$, a soft weighting
-\begin{equation}
-    \omega = \exp\!\left(-\frac{|\lambda|\, d_{\text{sem}}}{\tau + 10^{-6}}\right)
-\end{equation}
-is applied element-wise to the selected correlation features.
-
-\subsection{Limitations}
-Empirically, the kNN bias approach produced no measurable improvement in tracking quality. The fundamental issue is that re-ranking operates only on the candidates that already exist in the depth-based point cloud. Where the depth map has holes over occluded or reflective body regions, there are simply no good candidates to select regardless of the ranking criterion. Re-ranking 64 bad neighbours cannot substitute for having good neighbours in the first place.
-
-Additionally, with only two learnable scalar parameters ($\lambda$ and $\tau$), the model has insufficient capacity to adapt meaningfully. The gradient signal through the kNN gather operation is weak, and a short finetuning run (5,000 steps on four Panoptic scenes) confirmed that $\lambda$ and $\tau$ did not converge to values that produced consistent improvements.
-
-These results motivate a more direct intervention: rather than adjusting which existing points are selected, we add the missing body-surface points to the cloud.
-
-\section{Approach 2: Point Cloud Augmentation}
+\section{Point Cloud Augmentation with Mesh Vertices}
 \label{sec:pc_aug}
 
 \subsection{Mechanism}
@@ -208,6 +194,33 @@ Since all weights are derived from geometry and feature statistics (no learnable
 
 \subsection{Backward Compatibility}
 The forward pass accepts an optional tensor \texttt{sam3d\_vertices\_world} of shape $(B, T, n_{\text{persons}}, V, 3)$, where $V \approx 6890$. When this tensor is absent, the augmentation step is skipped and the model behaves identically to the baseline MVTracker. The fusion mode is configurable: \texttt{mean} reproduces the original uniform averaging, \texttt{depth\_weighted} enables depth-consistency weighting, and \texttt{consensus} adds the two-pass feature consensus refinement. The kNN bias code (Section~\ref{sec:knn_bias}) remains in the codebase and can be combined with augmentation, but the primary experiments evaluate augmentation alone.
+
+\section{Motivating Negative Result: kNN Semantic Bias}
+\label{sec:knn_bias}
+
+\subsection{Mechanism}
+Rather than changing the point cloud, the kNN bias approach re-ranks the neighbour candidates used for correlation. For each query point, instead of fetching $k=16$ nearest neighbours in Euclidean space, we over-fetch $k' = 4k = 64$ candidates and then re-rank them using a combined spatial-semantic distance.
+
+For each candidate, a soft body-part assignment is computed based on its distance to the 70 MHR joints provided by SAM3D:
+\begin{equation}
+    \mathbf{w} = \operatorname{softmax}\left( -\frac{\mathbf{d}_{\text{joint}}}{\tau} \right),
+\end{equation}
+where $\tau$ is a learnable temperature parameter (initialised to 0.15). The semantic distance between a query point $q$ and a candidate $c$ is then
+\begin{equation}
+    d_{\text{sem}} = \lVert \mathbf{w}_{q} - \mathbf{w}_{c} \rVert_2,
+\end{equation}
+and the combined ranking criterion is
+\begin{equation}
+    d_{\text{adj}} = d_{\text{spatial}} + |\lambda|\, d_{\text{sem}},
+\end{equation}
+where $\lambda$ is a learnable strength parameter (initialised to 0.1). Top-$k$ selection is performed on $d_{\text{adj}}$. To provide a differentiable gradient path to $\lambda$ and $\tau$, a soft weighting
+\begin{equation}
+    \omega = \exp\!\left(-\frac{|\lambda|\, d_{\text{sem}}}{\tau + 10^{-6}}\right)
+\end{equation}
+is applied element-wise to the selected correlation features.
+
+\subsection{Limitations}
+Empirically, the kNN bias approach produced no measurable improvement in tracking quality. The fundamental issue is that re-ranking operates only on the candidates that already exist in the depth-based point cloud. Where the depth map has holes over occluded or reflective body regions, there are simply no good candidates to select regardless of the ranking criterion. Additionally, with only two learnable scalar parameters ($\lambda$ and $\tau$), the model has insufficient capacity to adapt meaningfully. A short finetuning run (5,000 steps on four Panoptic scenes) confirmed that $\lambda$ and $\tau$ did not converge to values that produced consistent improvements. These results motivate a more direct intervention: adding the missing body-surface points to the cloud rather than re-ranking existing points.
 
 % --- Chapter 4: Data Generation & Training ---
 \chapter{The Synthetic-to-Real Data Engine}
@@ -354,6 +367,11 @@ Three finetuning configurations were evaluated, each restoring from the pretrain
 The third configuration addressed both identified causes of prior failures: the CNN encoder (BasicEncoder, 2.63M parameters) was frozen to preserve pretrained RGB features, and training used DUSt3R depths to match evaluation conditions. Despite these mitigations, the transformer ($\sim$20M trainable parameters) still overfits to the four-sequence training set. The oscillating AJ trajectory (drop at step 1,000, partial recovery at 2,000, renewed decline at 3,000) suggests the OneCycleLR schedule's warmup phase is destructive, and the model never reaches a stable equilibrium between retaining pretrained knowledge and learning human-specific patterns.
 
 The consistent failure across three progressively more conservative configurations --- reducing the learning rate by $50\times$ and freezing 12\% of parameters --- indicates that the obstacle is not simply hyperparameter tuning but a fundamental data scarcity problem: four 150-frame sequences provide insufficient diversity for the transformer to generalise. The \emph{zero-shot} depth-weighted augmented model therefore remains the primary reported result.
+
+\subsection{Summary of Findings}
+The evaluation establishes three key results. First, MVTracker's pretrained representations depend almost entirely on depth quality: performance degrades by $6\times$ when switching from optimization-based reconstruction (Dynamic3DGS) to online-estimable depth (DUSt3R), and by $77\%$ when depth is removed entirely. Second, mesh augmentation provides targeted value only under specific conditions: with DUSt3R depth and depth-weighted feature fusion, AJ improves by 1.7 points on narrow-baseline camera configurations where depth estimation is least reliable, while degrading on wider baselines where depth is already adequate. Consensus and point replacement strategies provide no additional benefit beyond depth weighting. Third, supervised finetuning consistently produces catastrophic forgetting --- even with a frozen encoder and $50\times$ learning rate reduction --- due to insufficient training data diversity: only 4--6 sequences have realistic depth maps, leaving the transformer unable to learn human-specific motion patterns without overwriting its pretrained knowledge.
+
+These findings indicate that the architectural bottleneck is not the augmentation strategy itself but rather the pretrained model's rigidity: the transformer expects depth-lifted features with specific distributional properties, and mesh-based features computed via multi-view projection do not match this expectation. Depth-weighted fusion partially mitigates the mismatch by filtering out unreliable projections, enabling modest improvements on configurations where the baseline performs worst.
 
 \section{Data Pipeline Evaluation (Modified AnthroTAP)}
 The modified AnthroTAP pipeline was applied to all 90 Panoptic Studio sequences. Of these, 67 produced valid \texttt{human\_tracks.npz} files; the remaining 23 failed due to missing annotations (no \texttt{tapvid3d\_annotations.npz}), absent SAM3D predictions, or corrupt imagery. The 67 processed sequences cover a range of activity categories including haggling, sports (basketball, football, softball, tennis), object interaction (boxes, juggle), and social interactions (mafia, ultimatum). Failure modes were handled robustly by the pipeline: zero-byte prediction files are skipped, sequences with corrupt images are excluded during pre-filtering, and per-frame fallback logic ensures partial results are never written.
