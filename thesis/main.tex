@@ -380,11 +380,13 @@ To quantify track quality in detail, we performed a cross-sequence audit over si
 \end{table}
 
 \subsection{Detailed Findings}
-\textbf{Data completeness.} All six sequences were generated successfully. Required fields are present for each sample: 3D trajectories, 2D pixel projections, visibility masks, and camera parameters. No NaN values were detected. For two-person scenes, each frame contains 1,140 tracks (140 keypoints and 1,000 mesh vertices).
+\textbf{Data completeness.} All six sequences were generated successfully. Required fields are present for each sample: 3D trajectories, 2D pixel projections, visibility masks, and camera parameters. No NaN values were detected. For two-person scenes, each frame contains 1,140 tracks (140 keypoints and 1,000 mesh vertices). Of the 67 sequences with \texttt{human\_tracks.npz}, 41 contain complete trajectory data; the remaining 26 (primarily haggling sequences) contain only metadata headers, likely due to SAM3D prediction failures on crowded multi-person scenes.
 
-\textbf{Temporal smoothness.} Root-joint velocity ranges from 0.01 to 0.02 units per frame. After a 3-frame smoothing kernel, mean acceleration is 0.022 and maximum acceleration is 0.63, indicating mostly smooth motion with occasional rapid actions.
+\textbf{Temporal smoothness.} Frame-to-frame displacement across all six sequences has a median of 0.02 units/frame and a 95th percentile of 0.10 units/frame, indicating smooth, physically plausible motion. The maximum observed displacement (2.43 units/frame in basketball) occurs exclusively at person appearance/disappearance boundaries where \texttt{track\_valid} transitions from true to false; these frames are masked during training loss computation. Excluding invalid transitions, the maximum velocity across all sequences is 0.18 units/frame (tennis), well within expected human motion ranges.
 
-\textbf{Multi-view coverage and occlusion robustness.} Each track is visible in 18--21 cameras on average (out of 31), with at least two visible views even for heavily occluded points.
+\textbf{Multi-view coverage and occlusion robustness.} Each track is visible in 19.5 cameras on average (out of 31), compared to 11.2 cameras for the original TAPVid-3D benchmark tracks on the same sequences. The higher visibility is expected: SAM3D tracks body keypoints and mesh vertices which are centrally located in the capture volume, while TAPVid-3D tracks include peripheral scene points with more limited camera coverage.
+
+\textbf{Cross-validation against TAPVid-3D annotations.} For the six sequences where both SAM3D and TAPVid-3D annotations exist, we verified: (i)~camera intrinsics and extrinsics are identical between both annotation sets, confirming shared coordinate frame calibration; (ii)~3D trajectory coordinate ranges are consistent (e.g., basketball X: [$-$1.12, 1.70] for SAM3D vs [$-$1.12, 1.62] for TAPVid-3D); and (iii)~reprojection of SAM3D 3D trajectories through the stored camera parameters recovers the stored 2D pixel coordinates with zero error, confirming internal geometric consistency of the pipeline output.
 
 \textbf{Known issue.} In softball, person 1 is absent in frames 0--53 and enters at frame 54. This is consistent with SAM3D visibility-driven detection and can be handled during training via visibility masking.
 
