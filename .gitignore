@@ -173,3 +173,4 @@ thesis/*.pdf
 **/.dist_test
 sandbox*
 *.sh
+!scripts/slurm/*.sh
