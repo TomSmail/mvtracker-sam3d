@@ -570,12 +570,14 @@ def main(cfg: DictConfig):
         logging.info(f"Panoptic human training dataset: {len(train_dataset)} samples")
     elif cfg.datasets.train.name == "panoptic-human-training-duster":
         # Panoptic human training with DUSt3R depths (honest, non-contaminated)
-        max_train_videos = cfg.datasets.train.get("max_videos", 4)
-        logging.info(f"Creating Panoptic human training dataset with DUSt3R depths (max_videos={max_train_videos})")
+        max_train_videos = cfg.datasets.train.get("max_videos", None)
+        train_views = list(cfg.datasets.train.get("views", [1, 7, 14, 20]))
+        logging.info(f"Creating Panoptic human training dataset with DUSt3R depths "
+                     f"(views={train_views}, max_videos={max_train_videos})")
 
         train_dataset = PanopticHumanTrajectoryDataset(
             data_root=os.path.join(cfg.datasets.root, "panoptic-multiview"),
-            views_to_return=[1, 7, 14, 20],
+            views_to_return=train_views,
             traj_per_sample=cfg.datasets.train.traj_per_sample,
             seed=None,
             max_videos=max_train_videos,

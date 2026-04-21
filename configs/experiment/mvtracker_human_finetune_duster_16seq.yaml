@@ -1,0 +1,48 @@
+# @package _global_
+# Finetuning with frozen encoder, DUSt3R depths, 16 training sequences (views 0,1,2,3).
+# Previous attempts with 4 sequences showed catastrophic forgetting due to data scarcity.
+# 16 sequences should provide 4x more diversity for the transformer to generalize.
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human_finetune_duster_16seq
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_pointcloud_augmentation: true
+  pc_aug_fusion_mode: 'depth_weighted'
+  pc_aug_alpha_depth: 15.0
+  use_sam3d_knn_bias: true
+  sam3d_knn_overfetch: 4
+
+datasets:
+  root: ./datasets
+  train:
+    name: panoptic-human-training-duster
+    views: [0, 1, 2, 3]
+    batch_size: 1
+    sequence_len: 24
+    traj_per_sample: 384
+    num_workers: 8
+  eval:
+    names:
+      - panoptic-human-views1_7_14_20-duster
+      - panoptic-human-views27_16_14_8-duster
+      - panoptic-human-views1_4_7_11-duster
+    num_workers: 0
+    max_seq_len: 300
+
+trainer:
+  num_steps: 5000
+  eval_freq: 1000
+  viz_freq: 1000
+  save_ckpt_freq: 1000
+  lr: 0.00001           # 1e-5 (50x lower than pretraining)
+  precision: bf16-mixed
+  freeze_encoder: true
+
+logging:
+  log_wandb: false
+
+modes:
+  validate_at_start: true
