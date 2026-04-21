@@ -833,50 +833,75 @@ def main_on_d3dgs_panoptic_scene(
         rerun_radii=0.002,
         **duster_kwargs,
 ):
-    md = json.load(open(os.path.join(scene_root, "train_meta.json"), 'r'))
-    n_frames = len(md['fn'])
+    # Load camera parameters from train_meta.json (D3DGS sequences) or
+    # tapvid3d_annotations.npz (AnthroTAP sequences without train_meta)
+    train_meta_path = os.path.join(scene_root, "train_meta.json")
+    tapvid_path = os.path.join(scene_root, "tapvid3d_annotations.npz")
 
-    # Check that the selected views are in the training set
     view_paths = []
     for view_idx in views_selection:
         view_path = scene_root / "ims" / f"{view_idx}"
-        assert view_idx in md["cam_id"][0], f"Camera {view_idx} is not in the training set"
-        assert view_path.exists()
+        assert view_path.exists(), f"View directory {view_path} does not exist"
         view_paths.append(view_path)
-    frame_paths = [sorted(view_path.glob("*.jpg")) for view_path in view_paths]
-    assert all(len(frame_paths[v]) == n_frames for v in range(len(views_selection)))
+
+    if os.path.exists(train_meta_path):
+        md = json.load(open(train_meta_path, 'r'))
+        n_frames = len(md['fn'])
+        for view_idx in views_selection:
+            assert view_idx in md["cam_id"][0], f"Camera {view_idx} is not in the training set"
+
+        frame_paths = [sorted(view_path.glob("*.jpg")) for view_path in view_paths]
+        assert all(len(frame_paths[v]) == n_frames for v in range(len(views_selection)))
+
+        fx, fy, cx, cy, extrinsics = [], [], [], [], []
+        for view_idx in views_selection:
+            fx_current, fy_current, cx_current, cy_current, extrinsics_current = [], [], [], [], []
+            for t in range(n_frames):
+                view_idx_in_array = md['cam_id'][t].index(view_idx)
+                k = md['k'][t][view_idx_in_array]
+                w2c = np.array(md['w2c'][t][view_idx_in_array])
+                fx_current.append(k[0][0])
+                fy_current.append(k[1][1])
+                cx_current.append(k[0][2])
+                cy_current.append(k[1][2])
+                extrinsics_current.append(w2c)
+
+            fx.append(fx_current[0])
+            fy.append(fy_current[0])
+            cx.append(cx_current[0])
+            cy.append(cy_current[0])
+            extrinsics.append(extrinsics_current[0])
+
+    elif os.path.exists(tapvid_path):
+        # AnthroTAP sequences: camera params from tapvid3d_annotations.npz
+        # Index in the array corresponds directly to view number
+        annot = np.load(tapvid_path, allow_pickle=True)
+        intrinsics_all = annot['intrinsics']  # (n_views, 3, 3)
+        extrinsics_all = annot['extrinsics']  # (n_views, 4, 4) — w2c matrices
+
+        frame_paths = [sorted(view_path.glob("*.jpg")) for view_path in view_paths]
+        n_frames = len(frame_paths[0])
+        assert all(len(fp) == n_frames for fp in frame_paths), \
+            f"Frame count mismatch across views: {[len(fp) for fp in frame_paths]}"
+
+        fx, fy, cx, cy, extrinsics = [], [], [], [], []
+        for view_idx in views_selection:
+            K = intrinsics_all[view_idx]
+            fx.append(K[0, 0])
+            fy.append(K[1, 1])
+            cx.append(K[0, 2])
+            cy.append(K[1, 2])
+            extrinsics.append(extrinsics_all[view_idx])
+    else:
+        raise FileNotFoundError(
+            f"No camera params found for {scene_root}: "
+            f"need train_meta.json or tapvid3d_annotations.npz"
+        )
 
     # Create the output directory
     views_selection_str = '-'.join(str(v) for v in views_selection)
     output_path = scene_root / f'duster-views-{views_selection_str}'
     os.makedirs(output_path, exist_ok=True)
-
-    # Load the camera parameters
-    fx, fy, cx, cy, extrinsics = [], [], [], [], []
-    for view_idx in views_selection:
-        fx_current, fy_current, cx_current, cy_current, extrinsics_current = [], [], [], [], []
-        for t in range(n_frames):
-            view_idx_in_array = md['cam_id'][t].index(view_idx)
-            k = md['k'][t][view_idx_in_array]
-            w2c = np.array(md['w2c'][t][view_idx_in_array])
-
-            fx_current.append(k[0][0])
-            fy_current.append(k[1][1])
-            cx_current.append(k[0][2])
-            cy_current.append(k[1][2])
-            extrinsics_current.append(w2c)
-
-        assert all(np.equal(fx_current[0], fx_current[t]).all() for t in range(1, n_frames))
-        assert all(np.equal(fy_current[0], fy_current[t]).all() for t in range(1, n_frames))
-        assert all(np.equal(cx_current[0], cx_current[t]).all() for t in range(1, n_frames))
-        assert all(np.equal(cy_current[0], cy_current[t]).all() for t in range(1, n_frames))
-        assert all(np.equal(extrinsics_current[0], extrinsics_current[t]).all() for t in range(1, n_frames))
-
-        fx.append(fx_current[0])
-        fy.append(fy_current[0])
-        cx.append(cx_current[0])
-        cy.append(cy_current[0])
-        extrinsics.append(extrinsics_current[0])
 
     fx = torch.tensor(fx).float()
     fy = torch.tensor(fy).float()
