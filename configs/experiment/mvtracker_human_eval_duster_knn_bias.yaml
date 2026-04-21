@@ -1,0 +1,31 @@
+# @package _global_
+# DUSt3R depth + SAM3D kNN semantic bias (no point cloud augmentation)
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_human_eval_duster_knn_bias
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_knn_bias: true
+  sam3d_knn_overfetch: 4
+  use_sam3d_pointcloud_augmentation: false
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - panoptic-human-views1_7_14_20-duster
+      - panoptic-human-views27_16_14_8-duster
+      - panoptic-human-views1_4_7_11-duster
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false
