@@ -9,7 +9,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=./logs/slurm_logs/%x-%j.out
 
-# Generate DUSt3R depths for training sequences (views 1,7,14,20 only)
+# Generate DUSt3R depths for training sequences (views 0,1,2,3)
+# Views 0-3 are the most universally available across Panoptic sequences.
 # These sequences already have SAM3D human_tracks.npz but no depth maps.
 
 set -ex
@@ -55,7 +56,7 @@ duster_kwargs = {
 }
 
 data_root = Path('$DIR/datasets/panoptic-multiview/')
-views_selection = [1, 7, 14, 20]  # only the training view config
+views_selection = [0, 1, 2, 3]  # most universally available views
 
 # Find sequences that need DUSt3R depths
 sequences = []
@@ -74,9 +75,14 @@ for scene_root in sorted(data_root.glob('[!.]*')):
     if not all((ims_dir / str(v)).is_dir() for v in views_selection):
         print(f'Skipping {scene_root.name}: missing view directories')
         continue
-    n_frames = len(list((ims_dir / '1').iterdir()))
-    if n_frames < 24:
-        print(f'Skipping {scene_root.name}: only {n_frames} frames')
+    # Check all selected views have enough frames
+    frame_counts = [len(list((ims_dir / str(v)).iterdir())) for v in views_selection]
+    min_frames = min(frame_counts)
+    if min_frames < 24:
+        print(f'Skipping {scene_root.name}: insufficient frames {frame_counts}')
+        continue
+    if not all(c == frame_counts[0] for c in frame_counts):
+        print(f'Skipping {scene_root.name}: mismatched frame counts {frame_counts}')
         continue
     sequences.append(scene_root)
 
