@@ -150,6 +150,18 @@ class PanopticStudioMultiViewDataset(Dataset):
                 warnings.warn(f"Skipping {scene_path} because it has no tapvid3d_annotations.npz labels file.")
                 continue
 
+            if self.use_duster_depths and self.views_to_return is not None:
+                views_str = '-'.join(str(v) for v in self.views_to_return)
+                duster_dir = os.path.join(scene_path, f'duster-views-{views_str}')
+                if not os.path.isdir(duster_dir):
+                    warnings.warn(f"Skipping {seq_name}: no DUSt3R depths at {duster_dir}")
+                    continue
+            elif not self.use_duster_depths:
+                d3dgs_dir = os.path.join(scene_path, "dynamic3dgs_depth")
+                if not os.path.isdir(d3dgs_dir):
+                    warnings.warn(f"Skipping {seq_name}: no dynamic3dgs_depth directory")
+                    continue
+
             valid_seqs.append(seq_name)
 
         if max_videos is not None:
