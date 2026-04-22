@@ -15,7 +15,6 @@ datasets:
     names:
       - panoptic-multiview-views1_7_14_20-cached
       - panoptic-multiview-views27_16_14_8-cached
-      - panoptic-multiview-views1_4_7_11-cached
     num_workers: 0
     max_seq_len: 300
 

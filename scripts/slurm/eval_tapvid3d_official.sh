@@ -9,7 +9,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --output=./logs/slurm_logs/%x-%j.out
 
-set -ex
+set -x
 cat $0
 DIR=$(realpath .)
 mkdir -p $DIR/logs/slurm_logs
@@ -23,20 +23,20 @@ cd $DIR
 
 nvidia-smi
 
-echo "=== 1/4: D3DGS depth baseline ==="
+echo "=== 1/4: D3DGS depth baseline (views1_7_14_20 + views27_16_14_8) ==="
 PYTHONPATH=$DIR python -m mvtracker.cli.eval \
-  +experiment=mvtracker_tapvid3d_eval_d3dgs
+  +experiment=mvtracker_tapvid3d_eval_d3dgs || echo "FAILED: D3DGS baseline"
 
 echo "=== 2/4: DUSt3R depth baseline ==="
 PYTHONPATH=$DIR python -m mvtracker.cli.eval \
-  +experiment=mvtracker_tapvid3d_eval_duster
+  +experiment=mvtracker_tapvid3d_eval_duster || echo "FAILED: DUSt3R baseline"
 
 echo "=== 3/4: DUSt3R depth + kNN bias ==="
 PYTHONPATH=$DIR python -m mvtracker.cli.eval \
-  +experiment=mvtracker_tapvid3d_eval_duster_knn
+  +experiment=mvtracker_tapvid3d_eval_duster_knn || echo "FAILED: DUSt3R + kNN"
 
 echo "=== 4/4: DUSt3R depth + finetuned model ==="
 PYTHONPATH=$DIR python -m mvtracker.cli.eval \
-  +experiment=mvtracker_tapvid3d_eval_duster_finetuned
+  +experiment=mvtracker_tapvid3d_eval_duster_finetuned || echo "FAILED: DUSt3R + finetuned"
 
 echo "=== All evaluations complete ==="
