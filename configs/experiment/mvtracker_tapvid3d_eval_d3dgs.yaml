@@ -1,0 +1,29 @@
+# @package _global_
+# Official TAPVid-3D benchmark evaluation with Dynamic3DGS depth (paper comparison)
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_tapvid3d_eval_d3dgs
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_pointcloud_augmentation: false
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - panoptic-multiview-views1_7_14_20-cached
+      - panoptic-multiview-views27_16_14_8-cached
+      - panoptic-multiview-views1_4_7_11-cached
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false

@@ -1,0 +1,33 @@
+# @package _global_
+# Official TAPVid-3D benchmark evaluation with DUSt3R depth + finetuned model (step 3000)
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_tapvid3d_eval_duster_finetuned
+restore_ckpt_path: ./logs/mvtracker_human_finetune_duster_16seq/model_003000.pth
+
+model:
+  use_sam3d_knn_bias: true
+  sam3d_knn_overfetch: 4
+  use_sam3d_pointcloud_augmentation: true
+  pc_aug_fusion_mode: 'depth_weighted'
+  pc_aug_alpha_depth: 15.0
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - panoptic-multiview-duster1_7_14_20-views1_7_14_20-cached
+      - panoptic-multiview-duster27_16_14_8-views27_16_14_8-cached
+      - panoptic-multiview-duster1_4_7_11-views1_4_7_11-cached
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false

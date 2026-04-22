@@ -1,0 +1,31 @@
+# @package _global_
+# Official TAPVid-3D benchmark evaluation with DUSt3R depth + kNN semantic bias
+defaults:
+  - override /model: mvtracker
+
+experiment_path: ./logs/mvtracker_tapvid3d_eval_duster_knn
+restore_ckpt_path: ./checkpoints/mvtracker_200000_june2025.pth
+
+model:
+  use_sam3d_knn_bias: true
+  sam3d_knn_overfetch: 4
+  use_sam3d_pointcloud_augmentation: false
+
+datasets:
+  root: /cluster/scratch/tsmail/datasets
+  eval:
+    names:
+      - panoptic-multiview-duster1_7_14_20-views1_7_14_20-cached
+      - panoptic-multiview-duster27_16_14_8-views27_16_14_8-cached
+      - panoptic-multiview-duster1_4_7_11-views1_4_7_11-cached
+    num_workers: 0
+    max_seq_len: 300
+
+modes:
+  eval_only: true
+
+trainer:
+  precision: bf16-mixed
+
+logging:
+  log_wandb: false
