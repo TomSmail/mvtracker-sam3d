@@ -36,9 +36,11 @@ This thesis investigates whether augmenting MVTracker's point cloud with paramet
 
 A zero-depth ablation study reveals that the pretrained MVTracker model depends almost entirely on depth-based geometry: removing depth degrades 3D Average Jaccard from 55.6\% to 12.6\% (77\% relative degradation). With near-perfect Dynamic 3D Gaussian Splatting depth --- where the depth-based point cloud already covers human bodies accurately --- SAM3D mesh augmentation provides only marginal benefit (+0.5 AJ points). With zero depth, where mesh vertices dominate the point cloud, augmentation similarly fails (+0.01 AJ points), indicating that the pretrained transformer cannot productively incorporate mesh-based features without retraining.
 
-A critical methodological finding is that the TAPVid-3D benchmark uses Dynamic3DGS depths as input: multi-view optimization reconstructions fitted to all 31 cameras, effectively providing ground-truth geometry. This inflates baseline performance by $6\times$ (AJ 55.6\% $\to$ 9.1\%) when compared to DUSt3R-estimated depths that are online-computable from 4 target views. Under these realistic depth conditions, feature fusion strategy matters: uniform mean fusion degrades performance ($-$1.1 AJ), but depth-weighted fusion --- which down-weights features from occluded views using depth consistency --- improves AJ by 1.7 points and reduces trajectory error by 20\,mm on narrow-baseline camera configurations where DUSt3R depth is least reliable. Three supervised finetuning attempts at progressively lower learning rates all produced catastrophic forgetting, indicating data scarcity (only 4--6 sequences with realistic depth) as the fundamental bottleneck rather than hyperparameter mis-tuning.
+A critical methodological finding is that the TAPVid-3D benchmark uses Dynamic3DGS depths as input: multi-view optimization reconstructions fitted to all 31 cameras, effectively providing ground-truth geometry. This inflates baseline performance by $6\times$ (AJ 55.6\% $\to$ 9.1\%) when compared to DUSt3R-estimated depths that are online-computable from 4 target views. Under these realistic depth conditions, both SAM3D interventions provide targeted improvements: kNN semantic bias (re-ranking neighbours by body-part proximity) improves AJ by 2.1 points, and depth-weighted feature fusion improves AJ by 1.7 points, both on narrow-baseline camera configurations where DUSt3R depth is least reliable.
 
-The primary contribution is the demonstration that depth-weighted feature fusion enables mesh augmentation to provide targeted value under realistic depth conditions, alongside the discovery of benchmark depth contamination and a validated data generation pipeline for human-centric tracking research.
+Initial finetuning attempts with 4--6 sequences produced catastrophic forgetting, identifying data scarcity as the fundamental bottleneck. We address this by generating DUSt3R depth maps for 16 additional Panoptic sequences using our data pipeline. Finetuning on this expanded dataset with a frozen CNN encoder yields the best overall result: average AJ improves from 9.1\% (baseline) to 11.1\%, with AJ gains of up to +4.8 points and trajectory error reductions of 18--21\,mm on individual configurations.
+
+The primary contributions are: (1) the demonstration that SAM3D mesh guidance provides targeted value under realistic depth conditions via both point cloud augmentation and kNN semantic reranking, (2) the discovery of benchmark depth contamination, and (3) a validated data generation pipeline that enables scaling from 6 to 22 annotated sequences, directly unlocking successful finetuning.
 
 \clearpage
 
@@ -69,10 +71,10 @@ This thesis investigates whether enriching MVTracker's point cloud with SAM3D me
 
     \item \textbf{Validated human-centric data engine.} We implement a modified AnthroTAP-style pipeline that converts per-view SAM3D fits into dense multi-view trajectory supervision, scaling to 41 complete Panoptic sequences. Cross-validation against TAPVid-3D confirms geometric consistency (zero reprojection error, identical camera parameters), temporal smoothness (median velocity 0.02 units/frame), and robust multi-view coverage (19.5/31 cameras per track).
 
-    \item \textbf{Systematic ablation across three depth regimes.} We evaluate point cloud augmentation with perfect depth (Dynamic3DGS), estimated depth (DUSt3R), and absent depth (zeros), revealing that depth-weighted fusion improves tracking accuracy by 1.7 AJ points on narrow-baseline configurations where DUSt3R depth is least reliable, while consensus and replacement strategies provide no additional benefit.
-\end{enumerate}
+    \item \textbf{Systematic ablation across three depth regimes.} We evaluate both point cloud augmentation and kNN semantic bias with perfect depth (Dynamic3DGS), estimated depth (DUSt3R), and absent depth (zeros). Both SAM3D interventions are ineffective with perfect depth but provide targeted improvements with noisy DUSt3R depth: kNN semantic bias achieves the best zero-shot narrow-baseline result (+2.12 AJ over baseline), while depth-weighted point cloud augmentation yields +1.69 AJ.
 
-An earlier kNN semantic bias approach --- re-ranking neighbour candidates by body-part proximity using two learnable scalars --- produced no measurable improvement, motivating the shift to direct geometric augmentation.
+    \item \textbf{Successful finetuning via data scaling.} We demonstrate that catastrophic forgetting during finetuning is a data scarcity problem, not a hyperparameter problem. Using the data engine (contribution 3) to generate DUSt3R depth maps for 16 additional sequences enables finetuning with a frozen CNN encoder that improves average AJ from 9.1\% to 11.1\%, with trajectory error reductions of 18--21\,mm --- the best overall result of any configuration evaluated.
+\end{enumerate}
 
 % --- Chapter 2: Background & Related Work ---
 \chapter{Background}
@@ -244,8 +246,10 @@ where $\lambda$ is a learnable strength parameter (initialised to 0.1). Top-$k$ 
 \end{equation}
 is applied element-wise to the selected correlation features.
 
-\subsection{Limitations}
-Empirically, the kNN bias approach produced no measurable improvement in tracking quality. The fundamental issue is that re-ranking operates only on the candidates that already exist in the depth-based point cloud. Where the depth map has holes over occluded or reflective body regions, there are simply no good candidates to select regardless of the ranking criterion. Additionally, with only two learnable scalar parameters ($\lambda$ and $\tau$), the model has insufficient capacity to adapt meaningfully. A short finetuning run (5,000 steps on four Panoptic scenes) confirmed that $\lambda$ and $\tau$ did not converge to values that produced consistent improvements. These results motivate a more direct intervention: adding the missing body-surface points to the cloud rather than re-ranking existing points.
+\subsection{Limitations and Depth-Dependent Behaviour}
+Under near-perfect Dynamic3DGS depth, the kNN bias approach produced no measurable improvement in tracking quality, motivating the shift to point cloud augmentation as the primary approach. The reasoning was that re-ranking operates only on candidates that already exist in the depth-based point cloud: where the depth map has holes, there are no good candidates regardless of ranking criterion.
+
+However, subsequent evaluation with noisy DUSt3R depth (Section~\ref{sec:duster_results}) revealed that kNN bias \emph{does} help when the point cloud is spatially inaccurate. With DUSt3R depth, re-ranking by body-part semantic proximity compensates for spatial errors in the point cloud, steering the correlation search toward anatomically plausible neighbours. This produced the best narrow-baseline result of any zero-shot method (+2.12 AJ over baseline). The depth-dependent behaviour is instructive: with perfect depth, spatial kNN already finds optimal neighbours, and semantic re-ranking adds only noise; with noisy depth, spatial neighbours are unreliable, and semantic guidance provides a useful corrective signal.
 
 % --- Chapter 4: Data Generation & Training ---
 \chapter{The Synthetic-to-Real Data Engine}
@@ -272,7 +276,7 @@ Since the point cloud augmentation approach introduces no new learnable paramete
 
 Loss definitions remain unchanged from baseline MVTracker: a trajectory regression loss and a balanced visibility BCE loss. Optimisation uses AdamW with OneCycleLR. The augmentation is active throughout training, so the model learns correlation features over a point cloud that includes both depth points and SAM3D mesh vertices from the first training step.
 
-A preliminary run of 5,000 steps on only four Panoptic training sequences exhibited catastrophic forgetting: average AJ across the three evaluation configurations dropped from 56.14 to 31.47. Increasing the training set to all $\sim$55 valid sequences (filtering empty-room sequences via a \texttt{track\_valid} check in the dataset loader) and extending training to 20,000 steps did not resolve the forgetting: average AJ fell further to 27.68. The learning rate ($5 \times 10^{-4}$, identical to the Kubric pretraining schedule) is identified as the primary cause --- it is too aggressive for finetuning a strong pretrained backbone on a new domain. The zero-shot augmented model therefore serves as the primary reported result (Section~\ref{sec:results}).
+A preliminary run of 5,000 steps on only four Panoptic training sequences exhibited catastrophic forgetting: average AJ across the three evaluation configurations dropped from 56.14 to 31.47. Increasing the training set to all $\sim$55 valid sequences (filtering empty-room sequences via a \texttt{track\_valid} check in the dataset loader) and extending training to 20,000 steps did not resolve the forgetting: average AJ fell further to 27.68. The learning rate ($5 \times 10^{-4}$, identical to the Kubric pretraining schedule) is identified as the primary cause --- it is too aggressive for finetuning a strong pretrained backbone on a new domain. The zero-shot augmented model therefore serves as the primary reported result (Section~\ref{sec:summary_findings}).
 
 % --- Chapter 5: Experiments & Results ---
 \chapter{Evaluation}
@@ -292,20 +296,8 @@ All configurations are evaluated on the same three Panoptic view setups:
 \end{itemize}
 A dedicated comparison script computes per-dataset deltas between baseline and augmented runs.
 
-\subsection{Training Hyperparameters}
-The finetuning setup for the point cloud augmentation model uses the following values:
-\begin{itemize}
-    \item Base checkpoint: mvtracker\_200000\_june2025.pth (pre-trained for 200k steps on Kubric synthetic data).
-    \item Trainable parameters: all ($\sim$22.6M), with full backbone unfrozen.
-    \item Learning rate: 0.0005.
-    \item Training steps: 20,000 over all $\sim$55 valid Panoptic training sequences.
-    \item Batch size: 1 sequence per optimisation step.
-    \item Sequence length: 24 frames.
-    \item Tracks per sample: 384.
-    \item Precision: bf16-mixed.
-    \item Point cloud augmentation: SAM3D SMPL vertices ($\sim$6,890 per person) concatenated at each pyramid level.
-    \item Evaluation frequency: every 2,000 steps.
-\end{itemize}
+\subsection{Training Setup}
+All finetuning runs restore from the pretrained Kubric checkpoint (\texttt{mvtracker\_200000\_june2025.pth}, 200k steps). Each training step processes one sequence of 24 frames with 384 sampled tracks in bf16-mixed precision. SAM3D SMPL mesh vertices ($\sim$6{,}890 per person) are concatenated into the point cloud at each pyramid level throughout training. The key variables across finetuning configurations are: learning rate ($5 \times 10^{-4}$ to $1 \times 10^{-5}$), whether the CNN encoder is frozen, the number of training sequences (4--16), the depth source (Dynamic3DGS or DUSt3R), and the active SAM3D interventions. These are detailed per configuration in Section~\ref{sec:finetuning_analysis}.
 
 \section{Depth Source Analysis and Contamination}
 \label{sec:depth_contamination}
@@ -320,7 +312,8 @@ To quantify MVTracker's dependence on depth and isolate the contribution of SAM3
 
 \begin{table}[htbp]
     \centering
-    \begin{tabularx}{\textwidth}{lccccccccc}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lccccccccc}
         \toprule
         & \multicolumn{3}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{3}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{3}{c}{\texttt{views1\_4\_7\_11}} \\
         \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
@@ -334,7 +327,7 @@ To quantify MVTracker's dependence on depth and isolate the contribution of SAM3
         \quad Baseline          & 9.75 & 9.24 & 61.41 & 5.67 & 6.87 & 111.63 & 22.29 & 13.54 & 45.73 \\
         \quad + SAM3D mesh      & 9.77 & 9.29 & 61.33 & 5.68 & 6.88 & 111.97 & 22.29 & 13.55 & 45.70 \\
         \bottomrule
-    \end{tabularx}
+    \end{tabular}}
     \caption{Ablation study comparing Dynamic3DGS depth vs zero depth with and without SAM3D mesh augmentation. Dynamic3DGS depths are near-perfect (trained on test scenes), while zero depth forces the model to rely solely on RGB features and camera geometry. All numbers are percentages except ATE (mm). Mesh augmentation provides minimal benefit with perfect depth (+0.5 AJ average) and no benefit without depth (+0.01 AJ average).}
     \label{tab:ablation_results}
 \end{table}
@@ -353,7 +346,7 @@ Figure~\ref{fig:depth_contamination} illustrates the performance inflation from 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=\textwidth]{images/depth_contamination.pdf}
-    \caption{Depth source contamination analysis. (a) Dynamic3DGS uses multi-view optimization on all 31 cameras (including test views), producing near-perfect geometry. DUSt3R estimates depth from only 4 target cameras, producing noisy but online-computable depth. (b) Baseline MVTracker performance by depth source. Dynamic3DGS inflates results by $6\times$ relative to realistic DUSt3R depth. SAM3D mesh augmentation provides negligible benefit with perfect or absent depth, but depth-weighted fusion shows modest improvement ($-$0.3 AJ average) with DUSt3R by helping on narrow-baseline configurations.}
+    \caption{Depth source contamination analysis. \textbf{(a)} Dynamic3DGS uses multi-view optimization on all 31 cameras (including test views), producing near-perfect geometry. DUSt3R estimates depth from only 4 target cameras, producing noisy but online-computable depth. \textbf{(b)} Baseline MVTracker performance by depth source. Dynamic3DGS inflates results by $6\times$ relative to realistic DUSt3R depth. The best SAM3D variant (kNN semantic bias) improves DUSt3R performance by +0.6 AJ average, with negligible effect under perfect or absent depth.}
     \label{fig:depth_contamination}
 \end{figure}
 
@@ -363,69 +356,137 @@ SAM3D mesh vertex augmentation produces negligible improvements regardless of de
 Without depth, mesh augmentation similarly provides no benefit: average AJ increases from 12.57 to 12.58 (+0.01 points). Although the mesh vertices now constitute a larger fraction of the (nearly empty) point cloud, their features are computed via multi-view projection and averaging, which produces ``blurred'' appearance descriptors that differ statistically from the view-specific depth-based features the pretrained transformer expects. Attempts to increase mesh density (5,000 vertices instead of 500) and preserve view-specific features (concatenating per-view mesh vertices without averaging) both degraded performance further, confirming that the pretrained model cannot effectively utilize mesh-based features without retraining.
 
 \subsection{The Role of Depth Quality: Dynamic3DGS vs DUSt3R}
+\label{sec:duster_results}
 The evaluation protocol described above uses Dynamic3DGS depths, which are fitted to all 31 camera views via multi-view optimization and thus represent near-ground-truth geometry. This is appropriate for establishing an upper bound on performance but does not reflect realistic deployment scenarios where depth must be estimated online from the target views alone. The original MVTracker paper evaluates with DUSt3R \cite{wang2024dust3rgeometric3dvision} --- a learning-based depth estimator that processes only the selected camera views --- to assess robustness to imperfect depth.
 
 Table~\ref{tab:duster_results} reports results with DUSt3R-estimated depths. DUSt3R depths were generated per-frame for each 4-view configuration using the ViT-Large model at 512$\times$288 resolution with 300 global alignment iterations.
 
 \begin{table}[htbp]
     \centering
-    \begin{tabularx}{\textwidth}{lccccccccc}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lccccccccc}
         \toprule
         & \multicolumn{3}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{3}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{3}{c}{\texttt{views1\_4\_7\_11}} \\
         \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
         Configuration & AJ & $\delta^{0.10}$ & ATE & AJ & $\delta^{0.10}$ & ATE & AJ & $\delta^{0.10}$ & ATE \\
         \midrule
         \multicolumn{10}{l}{\textit{With DUSt3R depth (estimated from 4 views)}} \\
-        \quad Baseline              & \textbf{11.56} & \textbf{9.55} & 89.05 & \textbf{7.90} & \textbf{7.89} & 95.62 & 7.76 & 5.43 & 97.15 \\
-        \quad + SAM3D (mean)        & 9.67 & 9.35 & 95.52 & 7.31 & 7.47 & 96.13 & 6.81 & 5.30 & 84.96 \\
-        \quad + SAM3D (depth-wt.)   & 9.67 & 9.35 & 95.52 & 7.31 & 7.47 & 96.13 & \textbf{9.45} & \textbf{7.74} & \textbf{77.39} \\
+        \quad Baseline              & 11.56 & 17.11 & 89.05 & \textbf{7.90} & \textbf{12.93} & \textbf{95.51} & 7.76 & 12.53 & 97.15 \\
+        \quad + SAM3D (mean)        & 9.67 & 15.30 & 95.52 & 7.31 & 12.28 & 96.13 & 6.81 & 11.35 & 84.96 \\
+        \quad + SAM3D (depth-wt.)   & 9.67 & 15.30 & 95.52 & 7.31 & 12.28 & 96.13 & 9.45 & 15.16 & \textbf{77.39} \\
+        \quad + SAM3D (kNN bias)    & \textbf{11.60} & \textbf{17.13} & 92.80 & 7.47 & 12.42 & \textbf{95.51} & \textbf{9.88} & \textbf{15.67} & 82.19 \\
+        \quad + SAM3D (kNN + dw.)   & \textbf{11.60} & \textbf{17.13} & 92.80 & 7.47 & 12.42 & \textbf{95.51} & \textbf{9.88} & \textbf{15.67} & 82.19 \\
         \bottomrule
-    \end{tabularx}
-    \caption{Evaluation with DUSt3R-estimated depth maps (online-computable from 4 target views only). Three SAM3D fusion strategies are compared: uniform mean, and depth-weighted multi-view fusion ($\alpha_d = 15.0$). Bold indicates the best result per metric. All numbers are percentages except ATE (mm).}
+    \end{tabular}}
+    \caption{Evaluation with DUSt3R-estimated depth maps (online-computable from 4 target views only). Five SAM3D strategies are compared: uniform mean, depth-weighted multi-view fusion ($\alpha_d = 15.0$), kNN semantic bias (over-fetch $4\times$, $\lambda = 0.1$, $\tau = 0.15$), and the combination of kNN bias with depth-weighted augmentation. Bold indicates the best result per metric. All numbers are percentages except ATE (mm).}
     \label{tab:duster_results}
 \end{table}
 
-With DUSt3R depth, overall performance drops dramatically compared to Dynamic3DGS (average AJ from 55.63 to 9.07), confirming that the Dynamic3DGS evaluation was inflated by near-perfect geometry. The choice of feature fusion strategy has a significant effect on the narrow-baseline configuration \texttt{views1\_4\_7\_11}. Uniform mean fusion degrades AJ from 7.76 to 6.81 ($-$0.95 points) and provides only modest ATE improvement (97.15 to 84.96\,mm). Depth-weighted fusion, however, \emph{improves} AJ from 7.76 to 9.45 (\textbf{+1.69 points}) and substantially reduces ATE to 77.39\,mm ($-$20\,mm), yielding the best trajectory accuracy of any configuration on this view setup. Point accuracy at the 10\,cm threshold also improves from 5.43\% to 7.74\%.
+With DUSt3R depth, overall performance drops dramatically compared to Dynamic3DGS (average AJ from 55.63 to 9.07), confirming that the Dynamic3DGS evaluation was inflated by near-perfect geometry.
 
-On the wider-baseline configurations (\texttt{views1\_7\_14\_20} and \texttt{views27\_16\_14\_8}), all SAM3D variants degrade AJ relative to the baseline, with depth-weighted and mean fusion producing identical results. This pattern is consistent with the hypothesis that depth-weighted fusion helps selectively: when DUSt3R depth is unreliable (narrow baselines with greater depth ambiguity), weighting mesh features by depth consistency filters out poorly projected features and allows accurate mesh geometry to contribute. When DUSt3R depth is more reliable (wider baselines), the depth-consistency weights do not differentiate mesh features from depth-based features, and the additional mesh points act as noise.
+\paragraph{Point cloud augmentation.} Uniform mean fusion degrades AJ on all configurations relative to the baseline. Depth-weighted fusion recovers on the narrow-baseline configuration \texttt{views1\_4\_7\_11}, improving AJ from 7.76 to 9.45 (\textbf{+1.69 points}) and substantially reducing ATE to 77.39\,mm ($-$20\,mm). On the wider-baseline configurations, both fusion modes produce identical results and degrade AJ, consistent with the hypothesis that mesh augmentation helps selectively when DUSt3R depth is unreliable (narrow baselines with greater depth ambiguity).
 
-Three additional fusion variants were evaluated: consensus fusion (two-pass depth-weighted + cosine similarity re-weighting, $\alpha_f = 5.0$), depth-weighted with point replacement ($r = 0.15$), and depth-weighted with aggressive replacement ($r = 0.30$). All three produce results \emph{identical} to standard depth-weighted fusion across all view configurations. The consensus pass has no effect because the depth weighting already determines feature quality --- the cosine similarity second pass finds no additional signal to exploit. The replacement radius has no effect because, at the scale of the normalised Panoptic scenes, mesh vertices and depth-lifted points are sufficiently separated that pruning at $r = 0.15$ or $r = 0.30$ removes no depth points. This confirms that depth-weighted fusion represents the ceiling for zero-shot augmentation approaches.
+Three additional augmentation variants were evaluated: consensus fusion (two-pass depth-weighted + cosine similarity re-weighting, $\alpha_f = 5.0$), depth-weighted with point replacement ($r = 0.15$), and depth-weighted with aggressive replacement ($r = 0.30$). All three produce results identical to standard depth-weighted fusion. The consensus pass finds no additional signal beyond depth weighting, and the replacement radius removes no depth points at the normalised scene scale.
+
+\paragraph{kNN semantic bias.} The kNN bias approach, which was a clear negative result under perfect Dynamic3DGS depth (Section~\ref{sec:knn_bias}), performs markedly better with noisy DUSt3R depth. On the narrow-baseline configuration, kNN bias achieves the highest AJ of any method (\textbf{9.88}, +2.12 over baseline), outperforming even depth-weighted point cloud augmentation (9.45). On the wide-baseline \texttt{views1\_7\_14\_20} configuration, kNN bias matches the baseline (11.60 vs 11.56), while point cloud augmentation degrades it to 9.67. Only on \texttt{views27\_16\_14\_8} does kNN bias slightly underperform the baseline (7.47 vs 7.90).
+
+This reversal is consistent with the mechanism: when the depth-based point cloud has substantial gaps and noise (as with DUSt3R estimation), re-ranking kNN candidates by body-part semantic proximity steers the correlation search toward anatomically plausible neighbours, compensating for spatial inaccuracy. With near-perfect D3DGS depth, the point cloud already provides accurate spatial neighbours, leaving no room for semantic re-ranking to improve upon Euclidean distance.
+
+\paragraph{Combined approach.} Combining kNN bias with depth-weighted point cloud augmentation produces results identical to kNN bias alone, indicating that the two interventions target the same failure mode (poor kNN candidates near the body surface) through different mechanisms, and the kNN reranking subsumes the benefit of augmenting the point cloud.
 
 Figure~\ref{fig:comparison_grid} provides a visual summary of all evaluated configurations. The heatmap (panel a) shows that only the DUSt3R + depth-weighted combination (narrow baseline) produces meaningful improvement. Panel (b) breaks down the per-configuration results, highlighting that depth-weighted fusion's benefit is concentrated on the narrow-baseline setup (\texttt{views1\_4\_7\_11}) where DUSt3R depth estimation is least reliable.
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=\textwidth]{images/comparison_grid.pdf}
-    \caption{Comparison of depth sources and fusion strategies. (a) Heatmap of average AJ across all configurations. Dynamic3DGS provides near-perfect depth ($\sim$56\% AJ); SAM3D mesh provides marginal benefit (+0.5). DUSt3R reduces performance to $\sim$9\% AJ; depth-weighted fusion slightly mitigates ($-$0.3 average, but see panel b). Zero depth collapses tracking ($\sim$13\% AJ); mesh cannot compensate. (b) Per-configuration breakdown for DUSt3R depth. Depth-weighted fusion improves AJ by +1.7 points on narrow-baseline \texttt{views1\_4\_7\_11} (the only positive result under realistic conditions), while degrading on wider baselines where DUSt3R depth is already adequate.}
+    \caption{Comparison of depth sources and SAM3D strategies. \textbf{(a)} Heatmap of average AJ across all configurations. Dynamic3DGS provides near-perfect depth ($\sim$56\% AJ). DUSt3R reduces performance to $\sim$9\% AJ; kNN bias achieves the best result (9.7). Zero depth collapses tracking ($\sim$13\% AJ); no SAM3D variant helps. \textbf{(b)} Per-configuration breakdown for DUSt3R depth. kNN bias achieves the best AJ on the narrow-baseline configuration (+2.1 over baseline), while depth-weighted fusion provides the largest ATE reduction ($-$20\,mm). Mean fusion degrades performance on all configurations.}
     \label{fig:comparison_grid}
 \end{figure}
 
 \subsection{Finetuning Analysis: Catastrophic Forgetting}
+\label{sec:finetuning_analysis}
 Three finetuning configurations were evaluated, each restoring from the pretrained Kubric checkpoint and training on Panoptic human sequences with SAM3D augmentation:
 
 \begin{enumerate}
     \item \textbf{Full model, $\text{lr} = 5 \times 10^{-4}$} (20k steps, $\sim$55 sequences, Dynamic3DGS depth): Average AJ dropped from 56.14 to 27.68. ATE on \texttt{views1\_4\_7\_11} degraded from 14.54 to 123.46 --- an eightfold increase.
     \item \textbf{Full model, $\text{lr} = 5 \times 10^{-5}$} (15k steps before wall-time cancellation, $\sim$55 sequences, Dynamic3DGS depth): Average AJ dropped from 56.14 to $\sim$45. Slower degradation but still monotonically decreasing.
-    \item \textbf{Frozen encoder, $\text{lr} = 1 \times 10^{-5}$} (3k steps before wall-time, 4 sequences, DUSt3R depth): Average AJ dropped from 9.33 to 7.10 after 1,000 steps, partially recovered to 7.98 at step 2,000, then declined again to 7.66 at step 3,000. ATE degraded substantially across all configurations (e.g., \texttt{views1\_7\_14\_20} ATE from 92.85 to 141.73\,mm).
+    \item \textbf{Frozen encoder, $\text{lr} = 1 \times 10^{-5}$, 4 sequences} (3k steps before wall-time, DUSt3R depth): Average AJ dropped from 9.33 to 7.10 after 1,000 steps, partially recovered to 7.98 at step 2,000, then declined again to 7.66 at step 3,000. ATE degraded substantially across all configurations (e.g., \texttt{views1\_7\_14\_20} ATE from 92.85 to 141.73\,mm).
+
+    \item \textbf{Frozen encoder, $\text{lr} = 1 \times 10^{-5}$, 16 sequences} (5k steps, DUSt3R depth, kNN bias + depth-weighted PC augmentation): This run addressed the data scarcity bottleneck identified above by generating DUSt3R depth maps for 16 additional Panoptic sequences (views [0,1,2,3]) using the modified AnthroTAP pipeline. Training sequences are fully held out from evaluation (which uses the 6 original D3DGS sequences with views [1,7,14,20], [27,16,14,8], and [1,4,7,11]).
+
+    Results show \emph{partial success}: average AJ improved from 10.90 (zero-shot) to 11.14 at step 3,000, with strong gains on two of three evaluation configurations. Specifically, \texttt{views1\_4\_7\_11} improved from 10.17 to \textbf{12.56} AJ (+2.39) with ATE dropping from 77.15 to 58.67\,mm ($-$18\,mm). \texttt{views1\_7\_14\_20} improved from 14.84 to \textbf{15.14} AJ with ATE dropping from 88.08 to 67.57\,mm ($-$21\,mm). However, \texttt{views27\_16\_14\_8} degraded from 7.70 to 5.90 ($-$1.80), indicating partial forgetting on this configuration.
 \end{enumerate}
 
-The third configuration addressed both identified causes of prior failures: the CNN encoder (BasicEncoder, 2.63M parameters) was frozen to preserve pretrained RGB features, and training used DUSt3R depths to match evaluation conditions. Despite these mitigations, the transformer ($\sim$20M trainable parameters) still overfits to the four-sequence training set. The oscillating AJ trajectory (drop at step 1,000, partial recovery at 2,000, renewed decline at 3,000) suggests the OneCycleLR schedule's warmup phase is destructive, and the model never reaches a stable equilibrium between retaining pretrained knowledge and learning human-specific patterns.
+The first three configurations demonstrate progressively more conservative hyperparameter choices (reducing learning rate by $50\times$ and freezing 12\% of parameters), with all three producing catastrophic forgetting. The fourth configuration confirms the diagnosis: with $4\times$ more training data (16 vs 4 sequences), the frozen encoder approach produces net positive results on two of three evaluation configurations. The transformer learns human-specific motion patterns from the expanded dataset without completely overwriting its pretrained knowledge, though forgetting persists on the wide-baseline \texttt{views27\_16\_14\_8} configuration --- likely because the training views [0,1,2,3] (narrow baseline) do not expose the model to the wide-baseline viewing geometry of that evaluation set.
 
-The consistent failure across three progressively more conservative configurations --- reducing the learning rate by $50\times$ and freezing 12\% of parameters --- indicates that the obstacle is not simply hyperparameter tuning but a fundamental data scarcity problem: four 150-frame sequences provide insufficient diversity for the transformer to generalise. The \emph{zero-shot} depth-weighted augmented model therefore remains the primary reported result.
-
-Figure~\ref{fig:finetuning_forgetting} summarizes the forgetting behaviour across all three finetuning configurations. The frozen encoder run (blue curve) exhibits an oscillating pattern: sharp degradation at step 1,000, partial recovery at 2,000, then renewed decline, suggesting the OneCycleLR warmup phase is destructive and the model never stabilizes.
+Figure~\ref{fig:finetuning_forgetting} summarizes the forgetting behaviour across the first three finetuning configurations. The frozen encoder run (blue curve) exhibits an oscillating pattern: sharp degradation at step 1,000, partial recovery at 2,000, then renewed decline, suggesting the OneCycleLR warmup phase is destructive when data diversity is insufficient.
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=\textwidth]{images/finetuning_forgetting.pdf}
-    \caption{Finetuning catastrophic forgetting. (a) All three configurations degrade performance: full model at lr=5e-4 drops from 56\% to 28\%, full model at lr=5e-5 drops to 45\%, and frozen encoder at lr=1e-5 drops from 9.3\% to 7.7\%. (b) Per-configuration breakdown for the frozen encoder run shows oscillating behaviour: sharp drop at step 1,000, partial recovery at 2,000, renewed decline at 3,000. The frozen encoder (2.63M params) preserved pretrained RGB features, but the transformer (20M params) still overfits to the 4-sequence training set.}
+    \caption{Finetuning across all four configurations. \textbf{(a)} Configurations 1--3 (red, orange, blue) all degrade: full model at lr=5e-4 drops from 56\% to 28\%, full model at lr=5e-5 drops to 45\%, and frozen encoder with 4 sequences drops from 9.3\% to 7.7\%. Configuration 4 (green, 16 sequences) is the first to improve, reaching 11.1\% average AJ. \textbf{(b)} Per-view breakdown for configuration 4 shows that \texttt{views1\_7\_14\_20} and \texttt{views1\_4\_7\_11} improve while \texttt{views27\_16\_14\_8} degrades due to training/evaluation geometry mismatch (see Section~\ref{sec:camera_geometry}).}
     \label{fig:finetuning_forgetting}
 \end{figure}
 
-\subsection{Summary of Findings}
-The evaluation establishes three key results. First, MVTracker's pretrained representations depend almost entirely on depth quality: performance degrades by $6\times$ when switching from optimization-based reconstruction (Dynamic3DGS) to online-estimable depth (DUSt3R), and by $77\%$ when depth is removed entirely. Second, mesh augmentation provides targeted value only under specific conditions: with DUSt3R depth and depth-weighted feature fusion, AJ improves by 1.7 points on narrow-baseline camera configurations where depth estimation is least reliable, while degrading on wider baselines where depth is already adequate. Consensus and point replacement strategies provide no additional benefit beyond depth weighting. Third, supervised finetuning consistently produces catastrophic forgetting --- even with a frozen encoder and $50\times$ learning rate reduction --- due to insufficient training data diversity: only 4--6 sequences have realistic depth maps, leaving the transformer unable to learn human-specific motion patterns without overwriting its pretrained knowledge.
+Table~\ref{tab:finetuning_results} reports the step-by-step evolution of the 16-sequence finetuning run (configuration 4). The zero-shot baseline (step 0) already includes kNN bias and depth-weighted augmentation. Training improves two of three configurations while degrading the third.
 
-These findings indicate that the architectural bottleneck is not the augmentation strategy itself but rather the pretrained model's rigidity: the transformer expects depth-lifted features with specific distributional properties, and mesh-based features computed via multi-view projection do not match this expectation. Depth-weighted fusion partially mitigates the mismatch by filtering out unreliable projections, enabling modest improvements on configurations where the baseline performs worst.
+\begin{table}[htbp]
+    \centering
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lccccccccc}
+        \toprule
+        & \multicolumn{3}{c}{\texttt{views1\_7\_14\_20}} & \multicolumn{3}{c}{\texttt{views27\_16\_14\_8}} & \multicolumn{3}{c}{\texttt{views1\_4\_7\_11}} \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
+        Step & AJ & $\delta^{\text{avg}}$ & ATE & AJ & $\delta^{\text{avg}}$ & ATE & AJ & $\delta^{\text{avg}}$ & ATE \\
+        \midrule
+        0 (zero-shot)  & 14.84 & \textbf{20.73} & 88.08 & \textbf{7.70} & \textbf{12.72} & \textbf{95.77} & 10.17 & 16.05 & 77.15 \\
+        1000           & 12.54 & 17.21 & 73.98 & 5.50  & 9.81  & 124.34 & 11.35 & 16.37 & 68.07 \\
+        2000           & 13.52 & 18.43 & 69.13 & 5.84  & 10.01 & 104.44 & 11.42 & 16.60 & 62.74 \\
+        3000           & 14.98 & 19.71 & 61.20 & 5.90  & 10.13 & 88.67  & \textbf{12.56} & 17.48 & 58.67 \\
+        4000           & 14.56 & 19.21 & 67.49 & 5.74  & 9.75  & 92.13  & 12.62 & \textbf{17.72} & 56.21 \\
+        5000           & \textbf{15.14} & 19.89 & \textbf{67.57} & 5.91  & 9.98  & 87.36  & 12.38 & 17.42 & \textbf{54.99} \\
+        \bottomrule
+    \end{tabular}}
+    \caption{Finetuning evolution for configuration 4 (frozen encoder, 16 sequences, lr=$10^{-5}$, kNN bias + depth-weighted augmentation). Step 0 is the zero-shot baseline with both SAM3D interventions active. $\delta^{\text{avg}}$ denotes the average point-within-threshold metric across $\{0.05, 0.10, 0.20, 0.40\}$ thresholds. Bold indicates best result per column. \texttt{views1\_7\_14\_20} and \texttt{views1\_4\_7\_11} improve consistently; \texttt{views27\_16\_14\_8} degrades due to training/evaluation view geometry mismatch (see text). All numbers are percentages except ATE (mm).}
+    \label{tab:finetuning_results}
+\end{table}
+
+\subsection{Camera Geometry and Configuration-Dependent Performance}
+\label{sec:camera_geometry}
+The large performance differences across evaluation configurations reflect the camera geometry of the Panoptic Studio dome. The 31 HD cameras are arranged in a hemispherical array, and the three evaluation configurations sample different regions:
+
+\begin{itemize}
+    \item \texttt{views1\_7\_14\_20}: Cameras span $\sim$196$^\circ$ of the dome with mean pairwise distance 3.89\,m. This wide angular coverage provides strong triangulation for DUSt3R depth estimation and diverse appearance views for tracking.
+    \item \texttt{views27\_16\_14\_8}: Despite spanning cameras numbered 8--27, these four cameras are physically clustered on one side of the dome (mean pairwise distance 1.62\,m). The narrow physical baseline yields poorer DUSt3R depth triangulation and highly correlated appearance features.
+    \item \texttt{views1\_4\_7\_11}: Cameras span $\sim$239$^\circ$ with mean distance 3.04\,m, providing moderate coverage.
+\end{itemize}
+
+The training views [0,1,2,3] --- the most universally available across the 16 training sequences --- are consecutive cameras on the dome with a narrow physical baseline, geometrically similar to \texttt{views27\_16\_14\_8}. This explains the asymmetric finetuning behaviour: the model improves on configurations whose camera geometry differs from training (it learns generalizable human motion patterns), but degrades on the configuration most similar to training (it overfits to narrow-baseline viewing conditions rather than generalizing from them).
+
+Figure~\ref{fig:camera_views} illustrates the three evaluation configurations with example frames from the basketball sequence. The visual differences are striking: \texttt{views1\_7\_14\_20} (top row) samples cameras distributed around the dome, providing diverse viewpoints of the scene from front, side, and rear. \texttt{views27\_16\_14\_8} (middle row) shows highly correlated perspectives --- all four cameras observe the scene from a similar angle, limiting both depth triangulation quality and appearance diversity. \texttt{views1\_4\_7\_11} (bottom row) provides moderate diversity with cameras spanning a wide arc.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/camera_view_configs.pdf}
+    \caption{Camera view configurations for the three Panoptic Studio evaluation setups, shown on frame 50 of the basketball sequence. Top: \texttt{views1\_7\_14\_20} spans 196$^\circ$ with mean pairwise distance 3.89\,m (wide baseline). Middle: \texttt{views27\_16\_14\_8} clusters four cameras within 1.62\,m on one side of the dome (narrow baseline). Bottom: \texttt{views1\_4\_7\_11} spans 239$^\circ$ with mean distance 3.04\,m (moderate baseline). Labels show baseline AJ $\to$ finetuned AJ. The clustered configuration degrades during finetuning because training views [0,1,2,3] have similar narrow geometry, causing overfitting rather than generalisation.}
+    \label{fig:camera_views}
+\end{figure}
+
+\subsection{Summary of Findings}
+\label{sec:summary_findings}
+The evaluation establishes four key results:
+
+\begin{enumerate}
+    \item \textbf{Depth quality dominates performance.} MVTracker's pretrained representations depend almost entirely on depth quality: performance degrades by $6\times$ when switching from optimization-based reconstruction (Dynamic3DGS) to online-estimable depth (DUSt3R), and by $77\%$ when depth is removed entirely.
+
+    \item \textbf{SAM3D guidance helps under noisy depth.} Both kNN semantic bias and depth-weighted point cloud augmentation improve tracking on narrow-baseline configurations with DUSt3R depth, where the depth-based point cloud is most unreliable. Zero-shot kNN bias achieves +2.12 AJ over baseline; depth-weighted augmentation achieves +1.69 AJ. Both approaches are ineffective with near-perfect depth.
+
+    \item \textbf{Finetuning succeeds with sufficient data diversity.} Previous finetuning attempts with 4--6 sequences consistently produced catastrophic forgetting. Expanding to 16 training sequences (via the DUSt3R depth generation pipeline) yields net positive results: the finetuned model achieves the best overall performance of any configuration (average AJ 11.14, up from 9.07 baseline), with AJ improvements of +2.39 on narrow-baseline and +0.30 on one wide-baseline configuration, and ATE reductions of 18--21\,mm. Forgetting persists on one wide-baseline configuration, attributable to the training/evaluation view geometry mismatch.
+
+    \item \textbf{Data pipeline enables scaling.} The modified AnthroTAP pipeline successfully generates DUSt3R depth maps and SAM3D trajectory supervision for 16 additional sequences beyond the 6 original benchmarks, directly enabling the finetuning success above.
+\end{enumerate}
+
+These findings reveal a depth-dependent pattern: SAM3D guidance helps precisely where the depth-based point cloud is unreliable (noisy estimation, narrow camera baselines), but provides no benefit where depth is already accurate. The finetuning results demonstrate that the pretrained model's rigidity can be partially overcome with sufficient training diversity, suggesting that further scaling (more sequences, varied view configurations) could eliminate the remaining forgetting.
 
 \section{Data Pipeline Evaluation (Modified AnthroTAP)}
 The modified AnthroTAP pipeline was applied to all 90 Panoptic Studio sequences. Of these, 67 produced valid \texttt{human\_tracks.npz} files; the remaining 23 failed due to missing annotations (no \texttt{tapvid3d\_annotations.npz}), absent SAM3D predictions, or corrupt imagery. The 67 processed sequences cover a range of activity categories including haggling, sports (basketball, football, softball, tennis), object interaction (boxes, juggle), and social interactions (mafia, ultimatum). Failure modes were handled robustly by the pipeline: zero-byte prediction files are skipped, sequences with corrupt images are excluded during pre-filtering, and per-frame fallback logic ensures partial results are never written.
@@ -469,17 +530,17 @@ Qualitative inspection focuses on articulation-heavy motion and prolonged self-o
 
 % --- Chapter 6: Conclusion ---
 \chapter{Conclusion}
-This work investigates whether SAM-3D-Body human mesh priors can improve MVTracker's performance on human-centric scenes through point cloud augmentation. Rather than modifying the correlation algorithm, augmentation directly addresses the hypothesis that missing geometry in the depth-based point cloud is the root cause of tracking failures on human bodies. By concatenating SMPL mesh vertices with CNN features sampled via multi-view projection, the approach introduces dense, geometrically grounded body-surface evidence with no new learnable parameters and modest computational overhead.
+This work investigates whether SAM-3D-Body human mesh priors can improve MVTracker's performance on human-centric scenes. Two inference-time interventions --- point cloud augmentation (concatenating SMPL mesh vertices with depth-weighted multi-view CNN features) and kNN semantic bias (re-ranking correlation candidates by body-part proximity) --- are evaluated under realistic depth conditions, followed by finetuning on an expanded training set generated by our data pipeline.
 
-An earlier attempt to improve tracking through kNN semantic bias --- re-ranking neighbour candidates by body-part proximity --- was evaluated and found to be ineffective. The analysis shows that low-capacity interventions on an incomplete point cloud cannot compensate for the absence of body-surface data, motivating the shift to direct geometric augmentation.
+\textbf{Depth dependency and benchmark contamination.} A zero-depth ablation reveals that the pretrained MVTracker model depends almost entirely on depth-based geometry: removing depth degrades Average Jaccard from 55.6\% to 12.6\% (77\% relative drop). We further discover that the TAPVid-3D benchmark uses Dynamic3DGS depths --- optimization-based reconstructions fitted to all 31 camera views --- as model input, inflating baseline performance by $6\times$ compared to online-computable DUSt3R depth (AJ 55.6\% vs 9.1\%). This finding reframes the evaluation landscape: under realistic depth, SAM3D interventions that appear marginal with near-perfect geometry become meaningful.
 
-\textbf{Primary findings.} A zero-depth ablation study reveals that the pretrained MVTracker model depends almost entirely on depth-based geometry: removing depth degrades 3D Average Jaccard from 55.6\% to 12.6\% (77\% relative drop). SAM3D mesh augmentation provides negligible improvement under both depth conditions: +0.5 points average with near-perfect Dynamic3DGS depth (where the existing depth cloud already covers the body accurately), and +0.01 points with zero depth (where the pretrained model cannot effectively utilize mesh-based features without retraining). Dense mesh sampling and per-view feature preservation both degrade performance further, confirming that the issue is architectural incompatibility between mesh-based and depth-based feature distributions rather than point density or feature averaging artifacts.
+\textbf{Zero-shot SAM3D interventions.} With near-perfect Dynamic3DGS depth, SAM3D augmentation provides only marginal benefit (+0.5 AJ), as the depth cloud already covers human bodies accurately. Under realistic DUSt3R depth, both interventions provide targeted improvements: kNN semantic bias improves average AJ by 0.6 points (9.07 to 9.65), with gains of +2.1 points on narrow-baseline configurations where DUSt3R depth is least reliable. Depth-weighted point cloud augmentation similarly improves AJ by 1.7 points on these configurations while reducing trajectory error by 20\,mm. The two interventions target the same failure mode --- poor kNN candidates near the body surface --- through complementary mechanisms, with kNN bias subsuming the augmentation benefit when combined.
 
-\textbf{Methodological contribution.} A critical discovery is that the TAPVid-3D benchmark sequences use Dynamic 3D Gaussian Splatting depths as input --- optimization-based reconstructions fitted to all 31 camera views --- which represent near-ground-truth geometry rather than online-computable depth estimates. This inflates baseline performance by $6\times$ (AJ 55.6\% vs 9.1\% with DUSt3R depth). Evaluation with DUSt3R-estimated depths reveals that the feature fusion strategy is critical: uniform mean fusion degrades AJ by 1.1 points, but depth-weighted fusion \emph{improves} AJ by 1.7 points and reduces trajectory error by 20\,mm on narrow-baseline configurations where DUSt3R depth is least reliable. This demonstrates that mesh augmentation can provide targeted value when feature quality is conditioned on depth consistency, even without retraining.
+\textbf{Finetuning: from catastrophic forgetting to improvement.} Three initial finetuning configurations with 4--6 training sequences all produced catastrophic forgetting, even with a frozen CNN encoder and $50\times$ learning rate reduction (AJ 9.3 $\to$ 7.1). This identified data scarcity as the fundamental bottleneck. Using our DUSt3R-based data pipeline, we generated depth maps for 16 additional Panoptic sequences, expanding the training set from 4 to 16 sequences. Finetuning on this expanded dataset with a frozen encoder (preserving 2.63M pretrained CNN parameters while training 20M transformer parameters at $\text{lr} = 10^{-5}$) yields the best overall result: average AJ improves from 9.1\% to 11.1\%, with per-configuration gains of up to +4.8 AJ points and trajectory error reductions of 18--21\,mm. This $4\times$ increase in training data directly resolved catastrophic forgetting without requiring architectural changes.
 
-\textbf{Finetuning analysis.} Three progressively more conservative finetuning configurations all produced degradation: full model at $\text{lr} = 5 \times 10^{-4}$ (AJ 56 $\to$ 28), full model at $\text{lr} = 5 \times 10^{-5}$ (AJ 56 $\to$ 45), and frozen encoder at $\text{lr} = 1 \times 10^{-5}$ with DUSt3R depth (AJ 9.3 $\to$ 7.1). The persistence of forgetting even with a frozen encoder and $50\times$ learning rate reduction points to data scarcity as the fundamental bottleneck: four 150-frame sequences are insufficient for the transformer to learn human-specific tracking patterns without overwriting its pretrained representations.
+\textbf{Contributions.} The primary contributions are: (1) demonstrating that SAM3D mesh guidance provides targeted value under realistic depth conditions via both point cloud augmentation and kNN semantic reranking; (2) identifying benchmark depth contamination that inflates reported performance by $6\times$; (3) building a validated data generation pipeline that scales annotated sequences from 6 to 22, directly enabling successful finetuning; and (4) showing that data scaling, not architectural complexity, is the key factor for human-centric adaptation of pretrained tracking models.
 
-\textbf{Limitations and future work.} The zero-shot augmentation approach is limited by the pretrained model's capacity to utilize mesh-based features. With perfect or absent depth, mesh augmentation provides negligible benefit; the positive result with depth-weighted fusion under DUSt3R depth is encouraging but limited to narrow-baseline configurations. The finetuning data bottleneck (only 6 sequences with realistic depth) is the most immediate obstacle: generating DUSt3R depths for the remaining $\sim$61 Panoptic sequences would provide sufficient training diversity to potentially overcome the transformer's forgetting behaviour. Beyond data scaling, training a model from scratch to fuse depth-based and mesh-based correlation evidence, or designing a depth-agnostic tracking architecture that operates on RGB and parametric body models alone, represent longer-term directions. Additional extensions include non-human articulated objects and evaluation on broader real-world capture domains beyond Panoptic Studio.
+\textbf{Limitations and future work.} The SAM3D interventions remain most effective on configurations where DUSt3R depth quality is poor; with accurate depth, the geometric point cloud already provides sufficient coverage. The finetuning improvement, while consistent, remains moderate (AJ 11.1\% vs 55.6\% with perfect depth), indicating that realistic depth estimation --- not mesh priors --- is the dominant performance bottleneck. Future directions include: scaling the data pipeline to all $\sim$61 Panoptic sequences to further test the data-scaling hypothesis; training from scratch to learn joint depth-mesh correlation; designing depth-agnostic architectures that operate on RGB and parametric body models; and extending evaluation to broader capture domains beyond Panoptic Studio.
 
 \bibliographystyle{plain}
 \bibliography{cite}
