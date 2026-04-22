@@ -233,7 +233,11 @@ class PanopticStudioMultiViewDataset(Dataset):
             rgb_folder = os.path.join(ims_path, str(v))
             rgb_files = sorted(os.listdir(rgb_folder))
             rgb_images = [cv2.imread(os.path.join(rgb_folder, f))[:, :, ::-1] for f in rgb_files]
-            depth = np.load(os.path.join(depths_path, f"depths_{v:02d}.npy"))
+            d3dgs_depth_file = os.path.join(depths_path, f"depths_{v:02d}.npy")
+            if os.path.isfile(d3dgs_depth_file):
+                depth = np.load(d3dgs_depth_file)
+            else:
+                depth = np.zeros((len(rgb_files), rgb_images[0].shape[0], rgb_images[0].shape[1]), dtype=np.float32)
             views[v] = {
                 "rgb": np.stack(rgb_images),
                 "depth": depth,
